@@ -1,0 +1,481 @@
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import {
+  Alert,
+  Box,
+  Button,
+  CircularProgress,
+  IconButton,
+  InputAdornment,
+  TextField,
+  Tooltip,
+  Typography,
+} from "@mui/material";
+import {
+  ArrowForwardRounded,
+  CloudUploadOutlined,
+  LoginRounded,
+  Visibility,
+  VisibilityOff,
+} from "@mui/icons-material";
+import { AnimatePresence, motion } from "framer-motion";
+import { useNavigate } from "react-router-dom";
+import { api, ApiError, resolveImageUrl } from "../api/client";
+import type { ImageItem, TimeRange } from "../api/types";
+import { useAuth } from "../auth/AuthContext";
+import { Logo } from "../components/Logo";
+import { Navigation } from "../components/Navigation";
+import { PeriodPicker } from "../components/PeriodPicker";
+import { useToast } from "../components/Feedback";
+import { useStageImages } from "../theme/ThemeHost";
+import { periodLabel } from "../utils/format";
+
+export function LandingPage() {
+  const { user, needsBootstrap, status, bootstrap } = useAuth();
+  const navigate = useNavigate();
+  const { notify } = useToast();
+  const [period, setPeriod] = useState<TimeRange>("day");
+  const [slides, setSlides] = useState<ImageItem[]>([]);
+  const [index, setIndex] = useState(0);
+  const [loadingSlides, setLoadingSlides] = useState(true);
+  const [reloadToken, setReloadToken] = useState(0);
+
+  const needsSetup = status === "ready" && needsBootstrap;
+  const slideUrls = useMemo(() => slides.map((slide) => slide.url), [slides]);
+  useStageImages(slideUrls);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingSlides(true);
+    (async () => {
+      try {
+        const ranking = await api.rank({ time: period, amount: 8 });
+        let images = ranking.winners.map((winner) => winner.image);
+        if (images.length === 0) {
+          images = await api.randomImages(8);
+        }
+        if (!cancelled) {
+          setSlides(images);
+          setIndex(0);
+        }
+      } catch {
+        if (!cancelled) setSlides([]);
+      } finally {
+        if (!cancelled) setLoadingSlides(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [period, reloadToken]);
+
+  useEffect(() => {
+    if (slides.length < 2) return;
+    const timer = window.setInterval(() => {
+      setIndex((previous) => (previous + 1) % slides.length);
+    }, 6500);
+    return () => window.clearInterval(timer);
+  }, [slides.length]);
+
+  const current = slides[index];
+
+  const start = () => {
+    if (!user) {
+      navigate("/login?next=/rank");
+      return;
+    }
+    navigate("/rank");
+  };
+
+  return (
+    <Box sx={{ position: "relative", minHeight: "100vh", overflow: "hidden" }}>
+      <Navigation floating />
+
+      <Box className="landing-background" aria-hidden>
+        <AnimatePresence initial={false}>
+          {current && (
+            <motion.div
+              key={`${current.id}-${index}`}
+              className="slide"
+              initial={{ opacity: 0, scale: 1.04 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 1.5, ease: [0.22, 0.9, 0.24, 1] }}
+            >
+              <img
+                src={resolveImageUrl(current.url)}
+                alt=""
+                className="ken-burns"
+                draggable={false}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+        {!current && (
+          <Box
+            sx={{
+              position: "absolute",
+              inset: 0,
+              background:
+                "radial-gradient(900px 600px at 20% 20%, rgba(143,188,187,.25), transparent 60%), radial-gradient(800px 700px at 85% 30%, rgba(180,142,173,.22), transparent 65%), #0d0b12",
+            }}
+          />
+        )}
+      </Box>
+
+      {needsSetup ? (
+        <BootstrapPanel
+          onSubmit={async (values) => {
+            try {
+              await bootstrap(values);
+              notify("The first light is yours. You are the administrator.", "success");
+            } catch (error) {
+              notify(
+                error instanceof ApiError ? error.message : "Could not create the account.",
+                "error",
+              );
+              throw error;
+            }
+          }}
+        />
+      ) : (
+        <Box
+          sx={{
+            position: "relative",
+            zIndex: 10,
+            minHeight: "100vh",
+            display: "grid",
+            placeItems: "center",
+            px: 3,
+            pb: { xs: 12, md: 10 },
+          }}
+        >
+          <Box sx={{ textAlign: "center", maxWidth: 860 }}>
+            <motion.div
+              initial={{ y: 26 }}
+              animate={{ y: 0 }}
+              transition={{ duration: 1, ease: [0.2, 0.9, 0.2, 1] }}
+            >
+              <Box
+                className="display brand-glow"
+                sx={{
+                  fontSize: "clamp(3.4rem, 13vw, 10.5rem)",
+                  lineHeight: 0.88,
+                  fontWeight: 600,
+                  letterSpacing: "-0.055em",
+                  mb: 2,
+                }}
+              >
+                ArtDream
+              </Box>
+              <Typography
+                sx={{
+                  fontSize: "clamp(1rem, 2.1vw, 1.35rem)",
+                  color: "rgba(255,255,255,.76)",
+                  letterSpacing: "0.02em",
+                  mb: 1,
+                }}
+              >
+                Art, gently judged.
+              </Typography>
+              <Typography
+                sx={{
+                  fontSize: "0.8rem",
+                  color: "rgba(255,255,255,.5)",
+                  letterSpacing: "0.16em",
+                  textTransform: "uppercase",
+                  mb: { xs: 4, md: 6 },
+                }}
+              >
+                {slides.length > 0
+                  ? `${periodLabel(period)}'s favourites`
+                  : "every picture has a rival"}
+              </Typography>
+
+              <Box
+                sx={{
+                  display: "flex",
+                  gap: 1.4,
+                  justifyContent: "center",
+                  flexWrap: "wrap",
+                }}
+              >
+                <Button
+                  onClick={start}
+                  variant="contained"
+                  size="large"
+                  className="hero-cta pulse-glow"
+                  endIcon={<ArrowForwardRounded />}
+                  sx={{
+                    px: 4.5,
+                    py: 1.6,
+                    borderRadius: 99,
+                    fontSize: "1.02rem",
+                    fontWeight: 750,
+                    textTransform: "none",
+                    color: (theme) =>
+                      theme.palette.getContrastText(theme.palette.primary.main),
+                    background: (theme) =>
+                      `linear-gradient(135deg, ${theme.palette.primary.main}, ${theme.palette.secondary.main})`,
+                    boxShadow: "0 22px 60px rgba(0,0,0,.45)",
+                    "&:hover": {
+                      transform: "translateY(-2px) scale(1.015)",
+                      boxShadow: "0 28px 70px rgba(0,0,0,.5)",
+                    },
+                  }}
+                >
+                  Rank images
+                </Button>
+                <Button
+                  onClick={() => navigate("/submit")}
+                  size="large"
+                  startIcon={<CloudUploadOutlined />}
+                  sx={{
+                    px: 3,
+                    py: 1.6,
+                    borderRadius: 99,
+                    textTransform: "none",
+                    fontWeight: 600,
+                    color: "#fff",
+                    borderColor: "rgba(255,255,255,.32)",
+                    "&:hover": {
+                      borderColor: "rgba(255,255,255,.7)",
+                      background: "rgba(255,255,255,.09)",
+                    },
+                  }}
+                  variant="outlined"
+                >
+                  Submit art
+                </Button>
+              </Box>
+
+              {!user && !needsSetup && (
+                <Box sx={{ mt: 2.6, display: "flex", gap: 2, justifyContent: "center" }}>
+                  <Button
+                    onClick={() => navigate("/login?next=/rank")}
+                    size="small"
+                    startIcon={<LoginRounded sx={{ fontSize: 16 }} />}
+                    sx={{
+                      color: "rgba(255,255,255,.65)",
+                      textTransform: "none",
+                      "&:hover": { color: "#fff" },
+                    }}
+                  >
+                    Sign in to keep your votes
+                  </Button>
+                </Box>
+              )}
+            </motion.div>
+          </Box>
+        </Box>
+      )}
+
+      {current && (
+        <Box
+          sx={{
+            position: "fixed",
+            left: { xs: 16, md: 32 },
+            bottom: { xs: 20, md: 32 },
+            zIndex: 20,
+            display: "flex",
+            alignItems: "center",
+            gap: 1.2,
+            maxWidth: "72vw",
+            px: 1.6,
+            py: 1,
+            borderRadius: 99,
+            background: "rgba(10,9,15,.36)",
+            backdropFilter: "blur(14px)",
+            border: "1px solid rgba(255,255,255,.1)",
+          }}
+        >
+          <Box
+            sx={{
+              fontSize: "0.68rem",
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              color: "rgba(255,255,255,.52)",
+            }}
+          >
+            {index + 1}/{slides.length}
+          </Box>
+          <Box
+            sx={{
+              width: 1,
+              height: 16,
+              background: "rgba(255,255,255,.18)",
+            }}
+          />
+          <Box sx={{ minWidth: 0 }}>
+            <Typography
+              noWrap
+              sx={{ fontSize: "0.86rem", fontWeight: 600, lineHeight: 1.25 }}
+            >
+              {current.title || "Untitled dream"}
+            </Typography>
+            <Typography noWrap sx={{ fontSize: "0.72rem", color: "rgba(255,255,255,.58)" }}>
+              by {current.author}
+            </Typography>
+          </Box>
+          {!loadingSlides && slides.length === 0 && (
+            <Button size="small" onClick={() => setReloadToken((n) => n + 1)}>
+              retry
+            </Button>
+          )}
+        </Box>
+      )}
+
+      <PeriodPicker value={period} onChange={setPeriod} />
+
+      {loadingSlides && (
+        <Box
+          sx={{
+            position: "fixed",
+            bottom: 24,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 25,
+            opacity: 0.6,
+          }}
+        >
+          <CircularProgress size={18} thickness={4} />
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+function BootstrapPanel({
+  onSubmit,
+}: {
+  onSubmit: (values: { username: string; password: string; displayName?: string }) => Promise<void>;
+}) {
+  const [username, setUsername] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const { notify } = useToast();
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (loading) return;
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{2,31}$/.test(username)) {
+      setError("3-32 characters, letters, digits, _ . -");
+      return;
+    }
+    if (password.length < 8) {
+      setError("Give the password at least 8 characters.");
+      return;
+    }
+    setError("");
+    setLoading(true);
+    try {
+      await onSubmit({ username, password, displayName: displayName || undefined });
+    } catch (submitError) {
+      if (!(submitError instanceof ApiError)) {
+        notify("Could not create the account.", "error");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Box
+      sx={{
+        position: "relative",
+        zIndex: 10,
+        minHeight: "100vh",
+        display: "grid",
+        placeItems: "center",
+        px: 2,
+        py: 12,
+      }}
+    >
+      <motion.div
+        initial={{ opacity: 0, y: 24, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ duration: 0.8, ease: [0.2, 0.9, 0.2, 1] }}
+        style={{ width: "min(480px, 100%)" }}
+      >
+        <Box className="glass-strong" sx={{ borderRadius: 6, p: { xs: 3, sm: 4.5 } }}>
+          <Logo size="lg" to={undefined} className="display" />
+          <Typography
+            className="display"
+            sx={{ mt: 2, fontSize: "1.9rem", fontWeight: 600, lineHeight: 1.1 }}
+          >
+            The first light.
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.8, mb: 3 }}>
+            Create the first account. It becomes the administrator of this ArtDream.
+          </Typography>
+
+          <Box component="form" onSubmit={submit} sx={{ display: "grid", gap: 1.7 }}>
+            <TextField
+              label="Username"
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              autoFocus
+              autoComplete="username"
+              size="small"
+              inputProps={{ spellCheck: false }}
+            />
+            <TextField
+              label="Display name (optional)"
+              value={displayName}
+              onChange={(event) => setDisplayName(event.target.value)}
+              size="small"
+              autoComplete="nickname"
+            />
+            <TextField
+              label="Password"
+              type={showPassword ? "text" : "password"}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              autoComplete="new-password"
+              size="small"
+              helperText="At least 8 characters."
+              InputProps={{
+                endAdornment: (
+                  <InputAdornment position="end">
+                    <IconButton
+                      aria-label={showPassword ? "Hide password" : "Show password"}
+                      onClick={() => setShowPassword((value) => !value)}
+                      edge="end"
+                      size="small"
+                    >
+                      {showPassword ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" />}
+                    </IconButton>
+                  </InputAdornment>
+                ),
+              }}
+            />
+            {error && (
+              <Alert severity="warning" sx={{ borderRadius: 3 }}>
+                {error}
+              </Alert>
+            )}
+            <Button
+              type="submit"
+              variant="contained"
+              size="large"
+              disabled={loading}
+              disableElevation
+              endIcon={loading ? <CircularProgress size={18} color="inherit" /> : <ArrowForwardRounded />}
+              sx={{ mt: 0.6, borderRadius: 99, py: 1.2, textTransform: "none", fontWeight: 700 }}
+            >
+              {loading ? "Lighting up…" : "Begin"}
+            </Button>
+          </Box>
+
+          <Box sx={{ mt: 2.4, display: "flex", justifyContent: "center" }}>
+            <Tooltip title="Only the very first account gets admin rights.">
+              <Typography className="helper-text">Only the first account is admin.</Typography>
+            </Tooltip>
+          </Box>
+        </Box>
+      </motion.div>
+    </Box>
+  );
+}

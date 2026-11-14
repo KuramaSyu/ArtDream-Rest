@@ -1,0 +1,30 @@
+services:
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      ADDR: ":8080"
+      DATA_DIR: /data
+      GIN_MODE: release
+      ALLOWED_ORIGINS: "http://localhost:5173,http://localhost:8080"
+    volumes:
+      - artdream-data:/data
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/api/v1/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "5173:80"
+
+volumes:
+  artdream-data:

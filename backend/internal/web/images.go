@@ -1,0 +1,518 @@
+package web
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"artdream/internal/imageproc"
+	"artdream/internal/store"
+
+	"github.com/gin-gonic/gin"
+)
+
+type updateImageRequest struct {
+	Author *string `json:"author"`
+	Title  *string `json:"title"`
+}
+
+type uploadResponse struct {
+	Image      imageDTO `json:"image"`
+	ClaimToken string   `json:"claimToken,omitempty"`
+}
+
+type claimItem struct {
+	ID         string `json:"id"`
+	ImageID    string `json:"imageId"`
+	Token      string `json:"token"`
+	ClaimToken string `json:"claimToken"`
+}
+
+type claimRequest struct {
+	Claims []claimItem `json:"claims"`
+	claimItem
+}
+
+func (s *Server) uploadImage(c *gin.Context) {
+	user := currentUser(c)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, s.MaxUploadBytes)
+
+	fileHeader, err := c.FormFile("image")
+	if err != nil {
+		fileHeader, err = c.FormFile("file")
+	}
+	if err != nil {
+		badRequest(c, "Attach an image in the `image` form field.")
+		return
+	}
+	if fileHeader.Size <= 0 {
+		badRequest(c, "The uploaded file is empty.")
+		return
+	}
+	if fileHeader.Size > s.MaxUploadBytes {
+		fail(c, http.StatusRequestEntityTooLarge, "too_large", "Images must be smaller than 30 MiB.")
+		return
+	}
+
+	f, err := fileHeader.Open()
+	if err != nil {
+		serverError(c, err)
+		return
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, s.MaxUploadBytes+1))
+	if err != nil {
+		serverError(c, err)
+		return
+	}
+	if int64(len(data)) > s.MaxUploadBytes {
+		fail(c, http.StatusRequestEntityTooLarge, "too_large", "Images must be smaller than 30 MiB.")
+		return
+	}
+
+	cfg, format, err := imageproc.DecodeConfig(data)
+	if err != nil {
+		badRequest(c, "That file does not look like a supported image (JPEG, PNG, GIF, WebP, BMP, TIFF).")
+		return
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > 20000 || cfg.Height > 20000 ||
+		int64(cfg.Width)*int64(cfg.Height) > 120_000_000 {
+		badRequest(c, "Image dimensions are outside the supported range (max 20000px and 120 megapixels).")
+		return
+	}
+	// The submit page currently only accepts landscape artwork. Enforcing it
+	// in the API keeps other clients honest too.
+	if cfg.Width <= cfg.Height {
+		badRequest(c, "Please submit a landscape image (width must be greater than height).")
+		return
+	}
+
+	author := trimTo(c.PostForm("author"), 120)
+	if author == "" {
+		badRequest(c, "Tell us who made this image (author/username is required).")
+		return
+	}
+	title := trimTo(c.PostForm("title"), 200)
+
+	id, err := newImageID()
+	if err != nil {
+		serverError(c, err)
+		return
+	}
+	mime := mimeForFormat(format)
+	ext := extForFormat(format)
+	dest := filepath.Join(s.UploadDir, id+"."+ext)
+	if err := os.MkdirAll(s.UploadDir, 0o755); err != nil {
+		serverError(c, err)
+		return
+	}
+	if err := os.WriteFile(dest, data, 0o644); err != nil {
+		serverError(c, err)
+		return
+	}
+
+	img := &store.Image{
+		ID:               id,
+		Author:           author,
+		Title:            title,
+		OriginalFilename: fileHeader.Filename,
+		StoragePath:      dest,
+		MimeType:         mime,
+		Width:            cfg.Width,
+		Height:           cfg.Height,
+		SizeBytes:        int64(len(data)),
+	}
+	claimToken := ""
+	if user != nil {
+		img.UploadedBy = &user.ID
+	} else {
+		// Anonymous uploads can be attached to an account later with this
+		// secret token, stored on the submitter's device.
+		claimToken, err = newClaimToken()
+		if err != nil {
+			serverError(c, err)
+			return
+		}
+		img.ClaimToken = claimToken
+	}
+	if err := s.Store.CreateImage(c.Request.Context(), img); err != nil {
+		_ = os.Remove(dest)
+		serverError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, uploadResponse{Image: imageToDTO(img), ClaimToken: claimToken})
+}
+
+// claimImages links images uploaded anonymously from this device to the
+// signed-in account. Clients send the claim tokens returned at upload time.
+func (s *Server) claimImages(c *gin.Context) {
+	user := currentUser(c)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64<<10)
+	var req claimRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		badRequest(c, "Could not parse the claim payload.")
+		return
+	}
+	claims := make([]store.ImageClaim, 0, len(req.Claims)+1)
+	for _, item := range req.Claims {
+		id := strings.TrimSpace(firstNonEmpty(item.ID, item.ImageID))
+		token := strings.TrimSpace(firstNonEmpty(item.Token, item.ClaimToken))
+		if id != "" && token != "" {
+			claims = append(claims, store.ImageClaim{ID: id, Token: token})
+		}
+	}
+	if id := strings.TrimSpace(firstNonEmpty(req.ID, req.ImageID)); id != "" {
+		token := strings.TrimSpace(firstNonEmpty(req.Token, req.ClaimToken))
+		if token != "" {
+			claims = append(claims, store.ImageClaim{ID: id, Token: token})
+		}
+	}
+	if len(claims) == 0 {
+		badRequest(c, "Provide at least one id and claim token.")
+		return
+	}
+	if len(claims) > 200 {
+		badRequest(c, "At most 200 submissions can be claimed at once.")
+		return
+	}
+	claimed, err := s.Store.ClaimImages(c.Request.Context(), user.ID, claims)
+	if err != nil {
+		serverError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"claimed": claimed, "count": len(claimed)})
+}
+
+func newClaimToken() (string, error) {
+	buf := make([]byte, 24)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func (s *Server) imagesByAuthor(c *gin.Context) {
+	author := trimTo(c.Query("author"), 120)
+	if author == "" {
+		badRequest(c, "Provide an author, e.g. /images/author?author=Ada.")
+		return
+	}
+	images, total, err := s.Store.ImagesByAuthor(c.Request.Context(), author, parseAmount(c, 100, 500), parseOffset(c))
+	if err != nil {
+		serverError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": imagesToDTO(images), "total": total, "author": author})
+}
+
+func (s *Server) randomImages(c *gin.Context) {
+	amount := parseAmount(c, 1, 50)
+	var exclude []string
+	for _, id := range strings.Split(c.Query("exclude"), ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			exclude = append(exclude, id)
+		}
+	}
+	images, err := s.Store.RandomImages(c.Request.Context(), amount, trimTo(c.Query("author"), 120), exclude)
+	if err != nil {
+		serverError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, imagesToDTO(images))
+}
+
+func (s *Server) imageMeta(c *gin.Context) {
+	id := c.Param("id")
+	img, err := s.Store.GetImage(c.Request.Context(), id)
+	if err != nil {
+		asStoreError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, imageToDTO(img))
+}
+
+func (s *Server) serveImage(c *gin.Context) {
+	id := c.Param("id")
+	img, err := s.Store.GetImage(c.Request.Context(), id)
+	if err != nil {
+		asStoreError(c, err)
+		return
+	}
+
+	opts := imageproc.RenderOptions{SourceMime: img.MimeType}
+	if format := strings.ToLower(strings.TrimSpace(c.Query("format"))); format != "" {
+		switch format {
+		case "webp", "png", "jpg", "jpeg":
+			opts.Format = format
+		default:
+			badRequest(c, "format must be one of webp, png, jpg.")
+			return
+		}
+	}
+	if raw := c.Query("w"); raw != "" {
+		w, err := strconv.Atoi(raw)
+		if err != nil || w < 1 || w > 8192 {
+			badRequest(c, "w must be between 1 and 8192.")
+			return
+		}
+		opts.Width = w
+	}
+	if raw := c.Query("h"); raw != "" {
+		h, err := strconv.Atoi(raw)
+		if err != nil || h < 1 || h > 8192 {
+			badRequest(c, "h must be between 1 and 8192.")
+			return
+		}
+		opts.Height = h
+	}
+	if raw := c.Query("quality"); raw != "" {
+		q, err := strconv.Atoi(raw)
+		if err != nil || q < 1 || q > 100 {
+			badRequest(c, "quality must be between 1 and 100.")
+			return
+		}
+		opts.Quality = q
+	}
+
+	etag := fmt.Sprintf(`"%s-%s-%d-%d-%d-%d"`, img.ID, normalFormat(opts.Format), opts.Width, opts.Height, opts.Quality, img.SizeBytes)
+	if match := c.GetHeader("If-None-Match"); match == etag || strings.Contains(match, etag) {
+		c.Status(http.StatusNotModified)
+		return
+	}
+
+	data, contentType, err := s.Renderer.Render(img.StoragePath, img.ID, opts)
+	if err != nil {
+		serverError(c, err)
+		return
+	}
+	c.Header("ETag", etag)
+	c.Header("Cache-Control", "public, max-age=31536000, immutable")
+	if c.Query("download") == "true" {
+		name := img.Title
+		if name == "" {
+			name = img.ID
+		}
+		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.%s"`, sanitizeFilename(name), fileExt(contentType)))
+	}
+	c.Data(http.StatusOK, contentType, data)
+}
+
+func (s *Server) listImagesAdmin(c *gin.Context) {
+	_, imgf, _, err := filterFromQuery(c)
+	if err != nil {
+		badRequest(c, err.Error())
+		return
+	}
+	images, total, err := s.Store.ListImages(c.Request.Context(), imgf)
+	if err != nil {
+		asStoreError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": imagesToDTO(images), "total": total})
+}
+
+func (s *Server) updateImageAdmin(c *gin.Context) {
+	id := c.Param("id")
+	var req updateImageRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		badRequest(c, "Provide author and/or title.")
+		return
+	}
+	var author, title *string
+	if req.Author != nil {
+		a := trimTo(*req.Author, 120)
+		if a == "" {
+			badRequest(c, "Author cannot be empty.")
+			return
+		}
+		author = &a
+	}
+	if req.Title != nil {
+		t := trimTo(*req.Title, 200)
+		title = &t
+	}
+	if author == nil && title == nil {
+		badRequest(c, "Nothing to update.")
+		return
+	}
+	if err := s.Store.UpdateImage(c.Request.Context(), id, author, title); err != nil {
+		serverError(c, err)
+		return
+	}
+	img, err := s.Store.GetImage(c.Request.Context(), id)
+	if err != nil {
+		asStoreError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, imageToDTO(img))
+}
+
+func (s *Server) deleteImageAdmin(c *gin.Context) {
+	id := c.Param("id")
+	keepVotes := c.Query("keepVotes") == "true"
+	if err := s.deleteImage(c.Request.Context(), id, !keepVotes); err != nil {
+		asStoreError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"deleted": id})
+}
+
+func (s *Server) bulkDeleteImagesAdmin(c *gin.Context) {
+	_, imgf, _, err := filterFromQuery(c)
+	if err != nil {
+		badRequest(c, err.Error())
+		return
+	}
+	// An explicit id list is the most precise way to delete a selection.
+	explicit := c.Query("ids")
+	var ids []string
+	for _, id := range strings.Split(explicit, ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			ids = append(ids, id)
+		}
+	}
+
+	keepVotes := c.Query("keepVotes") == "true"
+	deleted := 0
+	if len(ids) > 0 {
+		for _, id := range ids {
+			if err := s.deleteImage(c.Request.Context(), id, !keepVotes); err != nil {
+				if err == store.ErrNotFound {
+					continue
+				}
+				asStoreError(c, err)
+				return
+			}
+			deleted++
+		}
+		c.JSON(http.StatusOK, gin.H{"deleted": deleted})
+		return
+	}
+
+	imgf.Limit = 0
+	imgf.Offset = 0
+	images, _, err := s.Store.ListImages(c.Request.Context(), imgf)
+	if err != nil {
+		asStoreError(c, err)
+		return
+	}
+	for i := range images {
+		if err := s.deleteImage(c.Request.Context(), images[i].ID, !keepVotes); err != nil {
+			asStoreError(c, err)
+			return
+		}
+		deleted++
+	}
+	c.JSON(http.StatusOK, gin.H{"deleted": deleted})
+}
+
+func (s *Server) deleteImage(ctx context.Context, id string, deleteVotes bool) error {
+	img, err := s.Store.GetImage(ctx, id)
+	if err != nil {
+		return err
+	}
+	if deleteVotes {
+		_ = s.Store.DeleteVotesForImage(ctx, id)
+	}
+	if err := s.Store.DeleteImage(ctx, id); err != nil {
+		return err
+	}
+	_ = os.Remove(img.StoragePath)
+	_ = s.Renderer.RemoveForImage(id)
+	return nil
+}
+
+func newImageID() (string, error) {
+	buf := make([]byte, 12)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+func mimeForFormat(format string) string {
+	switch format {
+	case "jpeg":
+		return "image/jpeg"
+	case "png":
+		return "image/png"
+	case "gif":
+		return "image/gif"
+	case "webp":
+		return "image/webp"
+	case "bmp":
+		return "image/bmp"
+	case "tiff":
+		return "image/tiff"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+func extForFormat(format string) string {
+	switch format {
+	case "jpeg":
+		return "jpg"
+	case "tiff":
+		return "tif"
+	default:
+		return format
+	}
+}
+
+func normalFormat(f string) string {
+	if f == "" {
+		return "webp"
+	}
+	if f == "jpeg" {
+		return "jpg"
+	}
+	return f
+}
+
+func fileExt(contentType string) string {
+	switch contentType {
+	case "image/png":
+		return "png"
+	case "image/jpeg":
+		return "jpg"
+	default:
+		return "webp"
+	}
+}
+
+func sanitizeFilename(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == ' ':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	out := strings.TrimSpace(b.String())
+	if out == "" {
+		return "artdream-image"
+	}
+	if len(out) > 80 {
+		out = out[:80]
+	}
+	return out
+}
