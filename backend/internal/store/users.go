@@ -2,10 +2,11 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 // ErrNotFound is returned when a row cannot be found.
@@ -14,13 +15,17 @@ var ErrNotFound = errors.New("not found")
 // ErrConflict is returned for uniqueness violations.
 var ErrConflict = errors.New("conflict")
 
+func (s *Store) dbWithContext(ctx context.Context) *gorm.DB {
+	return s.db.WithContext(ctx)
+}
+
 // CountUsers returns the total number of accounts. Used to gate bootstrap.
 func (s *Store) CountUsers(ctx context.Context) (int, error) {
-	var n int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
+	var n int64
+	if err := s.dbWithContext(ctx).Model(&userRow{}).Count(&n).Error; err != nil {
 		return 0, err
 	}
-	return n, nil
+	return int(n), nil
 }
 
 // CreateUser inserts an account and fills u.ID / u.CreatedAt.
@@ -31,132 +36,126 @@ func (s *Store) CreateUser(ctx context.Context, u *User) error {
 	if u.CreatedAt.IsZero() {
 		u.CreatedAt = time.Now().UTC()
 	}
-	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO users (username, display_name, password_hash, is_admin, created_at, created_by)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		u.Username, u.DisplayName, u.PasswordHash, boolInt(u.IsAdmin), timeToUnix(u.CreatedAt), u.CreatedBy,
-	)
-	if err != nil {
+	row := userToRow(u)
+	row.ID = 0
+	if err := s.dbWithContext(ctx).Create(row).Error; err != nil {
 		if isUniqueViolation(err) {
 			return ErrConflict
 		}
 		return err
 	}
-	u.ID, _ = res.LastInsertId()
+	u.ID = row.ID
 	return nil
 }
 
-const userColumns = `id, username, display_name, password_hash, is_admin, created_at, created_by`
-
-func scanUser(row interface{ Scan(...any) error }) (*User, error) {
-	var u User
-	var created int64
-	var isAdmin int
-	var createdBy sql.NullInt64
-	if err := row.Scan(&u.ID, &u.Username, &u.DisplayName, &u.PasswordHash, &isAdmin, &created, &createdBy); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		return nil, err
-	}
-	u.IsAdmin = isAdmin != 0
-	u.CreatedAt = unixToTime(created)
-	if createdBy.Valid {
-		v := createdBy.Int64
-		u.CreatedBy = &v
-	}
-	return &u, nil
-}
-
 func (s *Store) GetUserByUsername(ctx context.Context, username string) (*User, error) {
-	return scanUser(s.db.QueryRowContext(ctx, `SELECT `+userColumns+` FROM users WHERE username = ?`, username))
+	var row userRow
+	err := s.dbWithContext(ctx).
+		Where("username = ? COLLATE NOCASE", username).
+		Take(&row).Error
+	if err != nil {
+		return nil, translateError(err)
+	}
+	return row.toModel(), nil
 }
 
 func (s *Store) GetUserByID(ctx context.Context, id int64) (*User, error) {
-	return scanUser(s.db.QueryRowContext(ctx, `SELECT `+userColumns+` FROM users WHERE id = ?`, id))
+	var row userRow
+	if err := s.dbWithContext(ctx).First(&row, "id = ?", id).Error; err != nil {
+		return nil, translateError(err)
+	}
+	return row.toModel(), nil
 }
 
 func (s *Store) ListUsers(ctx context.Context, f UserFilter) ([]User, int, error) {
-	var total int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&total); err != nil {
+	var total int64
+	if err := s.dbWithContext(ctx).Model(&userRow{}).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	limit := f.Limit
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+userColumns+` FROM users ORDER BY is_admin DESC, username ASC LIMIT ? OFFSET ?`,
-		limit, max(f.Offset, 0))
-	if err != nil {
+	var rows []userRow
+	if err := s.dbWithContext(ctx).
+		Order("is_admin DESC, username ASC").
+		Limit(limit).
+		Offset(max(f.Offset, 0)).
+		Find(&rows).Error; err != nil {
 		return nil, 0, err
 	}
-	defer rows.Close()
-	out := make([]User, 0)
-	for rows.Next() {
-		u, err := scanUser(rows)
-		if err != nil {
-			return nil, 0, err
-		}
-		out = append(out, *u)
+	out := make([]User, 0, len(rows))
+	for i := range rows {
+		out = append(out, *rows[i].toModel())
 	}
-	return out, total, rows.Err()
+	return out, int(total), nil
 }
 
 // UpdateUser changes display name, password hash and/or the admin flag. Nil
 // arguments leave the respective column untouched.
 func (s *Store) UpdateUser(ctx context.Context, id int64, displayName, passwordHash *string, isAdmin *bool) error {
+	updates := map[string]any{}
 	if displayName != nil {
-		if _, err := s.db.ExecContext(ctx, `UPDATE users SET display_name = ? WHERE id = ?`, *displayName, id); err != nil {
-			return err
-		}
+		updates["display_name"] = *displayName
 	}
 	if passwordHash != nil {
-		if _, err := s.db.ExecContext(ctx, `UPDATE users SET password_hash = ? WHERE id = ?`, *passwordHash, id); err != nil {
-			return err
-		}
+		updates["password_hash"] = *passwordHash
 	}
 	if isAdmin != nil {
-		if _, err := s.db.ExecContext(ctx, `UPDATE users SET is_admin = ? WHERE id = ?`, boolInt(*isAdmin), id); err != nil {
-			return err
-		}
+		updates["is_admin"] = boolInt64(*isAdmin)
 	}
-	return nil
+	if len(updates) == 0 {
+		return nil
+	}
+	return s.dbWithContext(ctx).Model(&userRow{}).Where("id = ?", id).Updates(updates).Error
 }
 
 func (s *Store) DeleteUser(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
-	return err
+	return s.dbWithContext(ctx).Where("id = ?", id).Delete(&userRow{}).Error
 }
 
 // --- sessions -------------------------------------------------------------
 
 func (s *Store) CreateSession(ctx context.Context, token string, userID int64, ttl time.Duration) error {
 	now := time.Now().UTC()
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)`,
-		token, userID, timeToUnix(now), timeToUnix(now.Add(ttl)))
-	return err
+	row := sessionRow{
+		Token:     token,
+		UserID:    userID,
+		CreatedAt: unixValue(now),
+		ExpiresAt: unixValue(now.Add(ttl)),
+	}
+	return s.dbWithContext(ctx).Create(&row).Error
 }
 
 func (s *Store) GetSessionUser(ctx context.Context, token string) (*User, error) {
-	u, err := scanUser(s.db.QueryRowContext(ctx,
-		`SELECT u.id, u.username, u.display_name, u.password_hash, u.is_admin, u.created_at, u.created_by
-		 FROM sessions s JOIN users u ON u.id = s.user_id
-		 WHERE s.token = ? AND s.expires_at > ?`, token, time.Now().Unix()))
-	if errors.Is(err, ErrNotFound) {
-		return nil, ErrNotFound
+	var row userRow
+	err := s.dbWithContext(ctx).
+		Table("sessions AS s").
+		Select("u.id, u.username, u.display_name, u.password_hash, u.is_admin, u.created_at, u.created_by").
+		Joins("JOIN users u ON u.id = s.user_id").
+		Where("s.token = ? AND s.expires_at > ?", token, nowUnix()).
+		Take(&row).Error
+	if err != nil {
+		return nil, translateError(err)
 	}
-	return u, err
+	return row.toModel(), nil
 }
 
 func (s *Store) DeleteSession(ctx context.Context, token string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE token = ?`, token)
-	return err
+	return s.dbWithContext(ctx).Where("token = ?", token).Delete(&sessionRow{}).Error
 }
 
 func (s *Store) DeleteExpiredSessions(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at <= ?`, time.Now().Unix())
+	return s.dbWithContext(ctx).Where("expires_at <= ?", nowUnix()).Delete(&sessionRow{}).Error
+}
+
+func translateError(err error) error {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ErrNotFound
+	}
+	if isUniqueViolation(err) {
+		return ErrConflict
+	}
 	return err
 }
 
@@ -167,6 +166,8 @@ func isUniqueViolation(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "UNIQUE constraint failed") || strings.Contains(msg, "constraint failed: UNIQUE")
 }
+
+func nowUnix() int64 { return time.Now().UTC().Unix() }
 
 func max(a, b int) int {
 	if a > b {

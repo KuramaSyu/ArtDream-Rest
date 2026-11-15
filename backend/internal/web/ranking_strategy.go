@@ -18,8 +18,9 @@ const (
 	strategyLegacy = "legacy"
 
 	// ahpMaxRatio is the top of the Saaty 1-9 pairwise comparison scale. Vote
-	// weights (0..1) are mapped linearly onto 1..9, so a tie is 1 and a
-	// maximum-confidence win is 9.
+	// weights (0..VoteSpeedMaxFactor) are mapped linearly onto 1..9 (and
+	// beyond for exceptionally fast voters), so a tie is 1 and a
+	// maximum-confidence win is at least 9.
 	ahpMaxRatio = 9.0
 )
 
@@ -71,7 +72,8 @@ func (ahpRankingStrategy) Name() string { return strategyAHP }
 // derives the AHP priority vector with the geometric-mean method.
 //
 // For every counted vote the winner/loser relationship contributes a Saaty
-// ratio of 1+8*weight. Multiple judgments about the same pair are aggregated
+// ratio of 1+8*weight, where weight is the speed-scaled judgment weight.
+// Multiple judgments about the same pair are aggregated
 // with their geometric mean. Pairs without a direct vote are treated as
 // neutral (ratio 1), which makes the matrix complete without allocating an
 // N×N grid: only observed pairs are stored.
@@ -136,17 +138,17 @@ func (ahpRankingStrategy) Compute(votes []store.Vote, images map[string]*store.I
 			ls.wins++
 			rs.losses++
 			if left.ID == low {
-				agg.sumLog += ahpLogRatio(v.Weight)
+				agg.sumLog += ahpLogRatio(v.EffectiveWeight())
 			} else {
-				agg.sumLog -= ahpLogRatio(v.Weight)
+				agg.sumLog -= ahpLogRatio(v.EffectiveWeight())
 			}
 		default:
 			rs.wins++
 			ls.losses++
 			if right.ID == low {
-				agg.sumLog += ahpLogRatio(v.Weight)
+				agg.sumLog += ahpLogRatio(v.EffectiveWeight())
 			} else {
-				agg.sumLog -= ahpLogRatio(v.Weight)
+				agg.sumLog -= ahpLogRatio(v.EffectiveWeight())
 			}
 		}
 	}
@@ -194,14 +196,15 @@ func (ahpRankingStrategy) Compute(votes []store.Vote, images map[string]*store.I
 	return out, totalVotes
 }
 
-// ahpLogRatio maps a normalized vote weight (0..1) onto the Saaty 1-9 scale
-// and returns its natural logarithm.
+// ahpLogRatio maps an effective vote weight onto the Saaty scale and returns
+// its natural logarithm. Speed-scaled weights can exceed 1 for fast voters,
+// up to VoteSpeedMaxFactor.
 func ahpLogRatio(weight float64) float64 {
 	if weight < 0 {
 		weight = 0
 	}
-	if weight > 1 {
-		weight = 1
+	if weight > store.VoteSpeedMaxFactor {
+		weight = store.VoteSpeedMaxFactor
 	}
 	return math.Log(1 + (ahpMaxRatio-1)*weight)
 }

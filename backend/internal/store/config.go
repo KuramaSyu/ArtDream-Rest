@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
+
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -31,19 +32,14 @@ func (s *Store) GetAppConfig(ctx context.Context) (AppConfig, error) {
 		IncludeAuthors:         []string{},
 		IncludeTitles:          []string{},
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT key, value, updated_at FROM app_config`)
-	if err != nil {
+	rows := []appConfigRow{}
+	if err := s.dbWithContext(ctx).Find(&rows).Error; err != nil {
 		return config, err
 	}
-	defer rows.Close()
 
 	var updated int64
-	for rows.Next() {
-		var key, value string
-		var at int64
-		if err := rows.Scan(&key, &value, &at); err != nil {
-			return config, err
-		}
+	for _, row := range rows {
+		key, value, at := row.Key, row.Value, row.UpdatedAt
 		if at > updated {
 			updated = at
 		}
@@ -72,11 +68,8 @@ func (s *Store) GetAppConfig(ctx context.Context) (AppConfig, error) {
 			config.IncludeTitles = decodePatternList(value)
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return config, err
-	}
 	if updated > 0 {
-		config.UpdatedAt = unixToTime(updated)
+		config.UpdatedAt = unixTime(updated)
 	}
 	return config, nil
 }
@@ -167,12 +160,13 @@ func (s *Store) SetFilterLists(ctx context.Context, cfg AppConfig) error {
 }
 
 func (s *Store) setConfigValue(ctx context.Context, key, value string) error {
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO app_config (key, value, updated_at) VALUES (?, ?, ?)
-		 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-		key, value, time.Now().UTC().Unix(),
-	)
-	return err
+	row := appConfigRow{Key: key, Value: value, UpdatedAt: nowUnix()}
+	return s.dbWithContext(ctx).
+		Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "key"}},
+			DoUpdates: clause.AssignmentColumns([]string{"value", "updated_at"}),
+		}).
+		Create(&row).Error
 }
 
 // NormalizePatternList trims entries, drops empties/duplicates and verifies

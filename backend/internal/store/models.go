@@ -67,7 +67,11 @@ type Vote struct {
 	AnonymousID string    `json:"-"`
 	Metadata    string    `json:"metadata"`
 	DurationMs  *int64    `json:"durationMs,omitempty"`
-	CreatedAt   time.Time `json:"createdAt"`
+	// VoteSpeed is the dynamic 1..10 response-speed score derived from the
+	// voter's own timing history (5.5 = neutral). It scales the vote weight in
+	// the ranking strategies.
+	VoteSpeed float64   `json:"voteSpeed"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 // UserFilter is used by the admin user listing.

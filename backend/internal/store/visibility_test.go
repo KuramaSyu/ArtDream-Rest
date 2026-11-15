@@ -1,6 +1,11 @@
 package store
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
+)
 
 func TestVisibilityPolicy(t *testing.T) {
 	policy, err := CompileVisibility(AppConfig{
@@ -149,7 +154,25 @@ func TestCompileImageRequestLayeredListsAndService(t *testing.T) {
 	}
 }
 
-func TestSQLFilter(t *testing.T) {
+func TestVisibilityPolicyDatabaseFilters(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := db.AutoMigrate(&imageRow{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	rows := []imageRow{
+		{ID: "public-art", Author: "Ada", StoragePath: "/a", MimeType: "image/jpeg", UploadedBy: int64Ptr(3), FromPublicService: 1, ServiceName: "ArtStation"},
+		{ID: "private-art", Author: "Bob", StoragePath: "/b", MimeType: "image/jpeg", UploadedBy: int64Ptr(9), ServiceName: "ArtStation"},
+		{ID: "public-photo", Author: "Cid", StoragePath: "/c", MimeType: "image/jpeg", UploadedBy: int64Ptr(9), FromPublicService: 1, ServiceName: "Flickr"},
+	}
+	for i := range rows {
+		if err := db.Create(&rows[i]).Error; err != nil {
+			t.Fatalf("create: %v", err)
+		}
+	}
+
 	policy, err := CompileImageRequest(AppConfig{}, ImageRequest{
 		Visibility: VisibilityPublic,
 		Service:    "Art",
@@ -158,17 +181,13 @@ func TestSQLFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
-	where, args := policy.SQLFilter("images")
-	if where == "" {
-		t.Fatal("expected SQL filter")
+	var got []imageRow
+	if err := policy.apply(db.Model(&imageRow{})).Find(&got).Error; err != nil {
+		t.Fatalf("query: %v", err)
 	}
-	if len(args) != 3 {
-		t.Fatalf("args = %v, want 3", args)
-	}
-	if args[0] != "%art%" {
-		t.Errorf("service arg = %v", args[0])
-	}
-	if args[1] != int64(3) || args[2] != int64(9) {
-		t.Errorf("uploader ids should be sorted, got %v", args[1:])
+	if len(got) != 1 || got[0].ID != "public-art" {
+		t.Fatalf("filtered rows = %+v, want only public-art", got)
 	}
 }
+
+func int64Ptr(v int64) *int64 { return &v }

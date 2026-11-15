@@ -154,5 +154,6 @@ type VoteDTO struct {
 	User          *voteUserDTO   `json:"user,omitempty"`
 	Metadata      map[string]any `json:"metadata"`
 	DurationMs    *int64         `json:"durationMs,omitempty"`
+	VoteSpeed     float64        `json:"voteSpeed" example:"7.25"`
 	CreatedAt     time.Time      `json:"createdAt"`
 }

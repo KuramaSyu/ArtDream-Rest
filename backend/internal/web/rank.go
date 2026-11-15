@@ -277,6 +277,12 @@ func (s *Server) castVote(c *gin.Context) {
 		badRequest(c, err.Error())
 		return
 	}
+	priorVotes, durations, err := s.Store.VoteDurationHistory(ctx, v.UserID, v.AnonymousID, 0)
+	if err != nil {
+		serverError(c, err)
+		return
+	}
+	v.VoteSpeed = store.VoteSpeedFor(priorVotes, durations, v.DurationMs)
 	if err := s.Store.CreateVote(ctx, v); err != nil {
 		serverError(c, err)
 		return
@@ -565,11 +571,11 @@ func computeRankStats(votes []store.Vote, images map[string]*store.Image, skip f
 		case *v.WinnerImageID == left.ID:
 			ls.wins++
 			rs.losses++
-			ls.score += v.Weight
+			ls.score += v.EffectiveWeight()
 		default:
 			rs.wins++
 			ls.losses++
-			rs.score += v.Weight
+			rs.score += v.EffectiveWeight()
 		}
 	}
 

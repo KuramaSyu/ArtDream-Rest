@@ -210,6 +210,9 @@ definitions:
         type: string
       value:
         type: integer
+      voteSpeed:
+        example: 7.25
+        type: number
       weight:
         type: number
       winner:

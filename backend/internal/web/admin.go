@@ -154,6 +154,12 @@ func (s *Server) updateVoteAdmin(c *gin.Context) {
 	}
 	if req.DurationMs != nil {
 		v.DurationMs = req.DurationMs
+		priorVotes, durations, err := s.Store.VoteDurationHistory(ctx, v.UserID, v.AnonymousID, v.ID)
+		if err != nil {
+			serverError(c, err)
+			return
+		}
+		v.VoteSpeed = store.VoteSpeedFor(priorVotes, durations, v.DurationMs)
 	}
 
 	winner := req.Winner

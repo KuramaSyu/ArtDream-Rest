@@ -452,6 +452,7 @@ type voteDTO struct {
 	User          *voteUserDTO    `json:"user,omitempty"`
 	Metadata      json.RawMessage `json:"metadata"`
 	DurationMs    *int64          `json:"durationMs,omitempty"`
+	VoteSpeed     float64         `json:"voteSpeed"`
 	CreatedAt     time.Time       `json:"createdAt"`
 }
 
@@ -471,6 +472,7 @@ func voteToDTO(v *store.Vote, images map[string]*store.Image) voteDTO {
 		UserID:        v.UserID,
 		Username:      v.Username,
 		DurationMs:    v.DurationMs,
+		VoteSpeed:     v.VoteSpeed,
 		CreatedAt:     v.CreatedAt,
 	}
 	if img := images[v.LeftImageID]; img != nil {

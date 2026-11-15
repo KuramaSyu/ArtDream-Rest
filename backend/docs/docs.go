@@ -3509,6 +3509,10 @@ const docTemplate = `{
                 "value": {
                     "type": "integer"
                 },
+                "voteSpeed": {
+                    "type": "number",
+                    "example": 7.25
+                },
                 "weight": {
                     "type": "number"
                 },

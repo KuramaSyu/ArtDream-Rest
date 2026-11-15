@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"gorm.io/gorm"
 )
 
 // Image visibility values used by uploads and image requests. "public" means
@@ -284,27 +286,20 @@ func (p *VisibilityPolicy) HiddenMetadata(author, title string) bool {
 	return false
 }
 
-// SQLFilter returns the subset of request filters that can be pushed into
-// SQLite. Regex lists still need in-memory evaluation. Alias may be empty.
-func (p *VisibilityPolicy) SQLFilter(alias string) (string, []any) {
+// apply pushes the request filters that the database can evaluate onto a
+// GORM query. Regex lists still need in-memory evaluation.
+func (p *VisibilityPolicy) apply(q *gorm.DB) *gorm.DB {
 	if p == nil {
-		return "", nil
+		return q
 	}
-	prefix := ""
-	if alias = strings.TrimSpace(alias); alias != "" {
-		prefix = alias + "."
-	}
-	where := ""
-	args := make([]any, 0, 2)
 	switch p.visibility {
 	case VisibilityPublic:
-		where += ` AND ` + prefix + `from_public_service = 1`
+		q = q.Where("from_public_service = ?", 1)
 	case VisibilityPrivate:
-		where += ` AND ` + prefix + `from_public_service = 0`
+		q = q.Where("from_public_service = ?", 0)
 	}
 	if p.service != "" {
-		where += ` AND LOWER(` + prefix + `service_name) LIKE ?`
-		args = append(args, "%"+p.service+"%")
+		q = q.Where("LOWER(service_name) LIKE ?", "%"+p.service+"%")
 	}
 	if len(p.uploadedBy) > 0 {
 		ids := make([]int64, 0, len(p.uploadedBy))
@@ -312,12 +307,9 @@ func (p *VisibilityPolicy) SQLFilter(alias string) (string, []any) {
 			ids = append(ids, id)
 		}
 		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-		where += ` AND ` + prefix + `uploaded_by IN (` + placeholders(len(ids)) + `)`
-		for _, id := range ids {
-			args = append(args, id)
-		}
+		q = q.Where("uploaded_by IN ?", ids)
 	}
-	return where, args
+	return q
 }
 
 func matchesAny(patterns []*regexp.Regexp, value string) bool {

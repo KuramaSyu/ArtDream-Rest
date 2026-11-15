@@ -2,136 +2,86 @@ package store
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"regexp"
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
 )
 
-const voteModeColumns = `id, name, description, min_value, max_value, is_binary, created_at`
-
-func scanVoteMode(row interface{ Scan(...any) error }) (*VoteMode, error) {
-	var m VoteMode
-	var created int64
-	var binary int
-	if err := row.Scan(&m.ID, &m.Name, &m.Description, &m.MinValue, &m.MaxValue, &binary, &created); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		return nil, err
-	}
-	m.IsBinary = binary != 0
-	m.CreatedAt = unixToTime(created)
-	return &m, nil
-}
+// voteSpeedSampleLimit caps how much history the dynamic vote-speed
+// calibration reads. Recent votes describe the voter best and keep the query
+// cheap for very active accounts.
+const voteSpeedSampleLimit = 1000
 
 func (s *Store) ListVoteModes(ctx context.Context) ([]VoteMode, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+voteModeColumns+` FROM vote_modes ORDER BY id ASC`)
-	if err != nil {
+	var rows []voteModeRow
+	if err := s.dbWithContext(ctx).Order("id ASC").Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := make([]VoteMode, 0)
-	for rows.Next() {
-		m, err := scanVoteMode(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, *m)
+	out := make([]VoteMode, 0, len(rows))
+	for i := range rows {
+		out = append(out, *rows[i].toModel())
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Store) GetVoteModeByName(ctx context.Context, name string) (*VoteMode, error) {
-	return scanVoteMode(s.db.QueryRowContext(ctx,
-		`SELECT `+voteModeColumns+` FROM vote_modes WHERE name = ? COLLATE NOCASE`, name))
+	var row voteModeRow
+	err := s.dbWithContext(ctx).Where("name = ? COLLATE NOCASE", name).Take(&row).Error
+	if err != nil {
+		return nil, translateError(err)
+	}
+	return row.toModel(), nil
 }
 
 func (s *Store) GetVoteModeByID(ctx context.Context, id int64) (*VoteMode, error) {
-	return scanVoteMode(s.db.QueryRowContext(ctx,
-		`SELECT `+voteModeColumns+` FROM vote_modes WHERE id = ?`, id))
+	var row voteModeRow
+	if err := s.dbWithContext(ctx).First(&row, "id = ?", id).Error; err != nil {
+		return nil, translateError(err)
+	}
+	return row.toModel(), nil
 }
 
 func (s *Store) CreateVoteMode(ctx context.Context, m *VoteMode) error {
 	if m.CreatedAt.IsZero() {
 		m.CreatedAt = time.Now().UTC()
 	}
-	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO vote_modes (name, description, min_value, max_value, is_binary, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		m.Name, m.Description, m.MinValue, m.MaxValue, boolInt(m.IsBinary), timeToUnix(m.CreatedAt))
-	if err != nil {
-		if isUniqueViolation(err) {
-			return ErrConflict
-		}
-		return err
+	row := voteModeToRow(m)
+	row.ID = 0
+	if err := s.dbWithContext(ctx).Create(row).Error; err != nil {
+		return translateError(err)
 	}
-	m.ID, _ = res.LastInsertId()
+	m.ID = row.ID
 	return nil
 }
 
 func (s *Store) UpdateVoteMode(ctx context.Context, m *VoteMode) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE vote_modes SET name = ?, description = ?, min_value = ?, max_value = ?, is_binary = ? WHERE id = ?`,
-		m.Name, m.Description, m.MinValue, m.MaxValue, boolInt(m.IsBinary), m.ID)
-	if err != nil && isUniqueViolation(err) {
-		return ErrConflict
-	}
-	return err
+	err := s.dbWithContext(ctx).Model(&voteModeRow{}).
+		Where("id = ?", m.ID).
+		Updates(map[string]any{
+			"name":        m.Name,
+			"description": m.Description,
+			"min_value":   m.MinValue,
+			"max_value":   m.MaxValue,
+			"is_binary":   boolInt64(m.IsBinary),
+		}).Error
+	return translateError(err)
 }
 
 func (s *Store) CountVotesForMode(ctx context.Context, id int64) (int, error) {
-	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM votes WHERE mode_id = ?`, id).Scan(&n)
-	return n, err
+	var n int64
+	if err := s.dbWithContext(ctx).Model(&voteRow{}).Where("mode_id = ?", id).Count(&n).Error; err != nil {
+		return 0, err
+	}
+	return int(n), nil
 }
 
 func (s *Store) DeleteVoteMode(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM vote_modes WHERE id = ?`, id)
-	return err
+	return s.dbWithContext(ctx).Where("id = ?", id).Delete(&voteModeRow{}).Error
 }
 
 // --- votes ---------------------------------------------------------------
-
-const voteColumns = `id, mode_id, mode_name, left_image_id, right_image_id,
-	winner_image_id, loser_image_id, value, min_value, max_value, weight,
-	user_id, username, anonymous_id, metadata, duration_ms, created_at`
-
-func scanVote(row interface{ Scan(...any) error }) (*Vote, error) {
-	var v Vote
-	var winner, loser sql.NullString
-	var value, duration, userID sql.NullInt64
-	var created int64
-	if err := row.Scan(&v.ID, &v.ModeID, &v.ModeName, &v.LeftImageID, &v.RightImageID,
-		&winner, &loser, &value, &v.MinValue, &v.MaxValue, &v.Weight,
-		&userID, &v.Username, &v.AnonymousID, &v.Metadata, &duration, &created); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		return nil, err
-	}
-	if winner.Valid {
-		v.WinnerImageID = &winner.String
-	}
-	if loser.Valid {
-		v.LoserImageID = &loser.String
-	}
-	if value.Valid {
-		n := int(value.Int64)
-		v.Value = &n
-	}
-	if userID.Valid {
-		id := userID.Int64
-		v.UserID = &id
-	}
-	if duration.Valid {
-		d := duration.Int64
-		v.DurationMs = &d
-	}
-	v.CreatedAt = unixToTime(created)
-	return &v, nil
-}
 
 func (s *Store) CreateVote(ctx context.Context, v *Vote) error {
 	if v.CreatedAt.IsZero() {
@@ -140,35 +90,84 @@ func (s *Store) CreateVote(ctx context.Context, v *Vote) error {
 	if v.Metadata == "" {
 		v.Metadata = "{}"
 	}
-	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO votes (mode_id, mode_name, left_image_id, right_image_id,
-		 winner_image_id, loser_image_id, value, min_value, max_value, weight,
-		 user_id, username, anonymous_id, metadata, duration_ms, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		v.ModeID, v.ModeName, v.LeftImageID, v.RightImageID,
-		v.WinnerImageID, v.LoserImageID, v.Value, v.MinValue, v.MaxValue, v.Weight,
-		v.UserID, v.Username, v.AnonymousID, v.Metadata, v.DurationMs, timeToUnix(v.CreatedAt))
-	if err != nil {
+	row := voteToRow(v)
+	row.ID = 0
+	if err := s.dbWithContext(ctx).Create(row).Error; err != nil {
 		return err
 	}
-	v.ID, _ = res.LastInsertId()
+	v.ID = row.ID
 	return nil
 }
 
 func (s *Store) GetVote(ctx context.Context, id int64) (*Vote, error) {
-	return scanVote(s.db.QueryRowContext(ctx, `SELECT `+voteColumns+` FROM votes WHERE id = ?`, id))
+	var row voteRow
+	if err := s.dbWithContext(ctx).First(&row, "id = ?", id).Error; err != nil {
+		return nil, translateError(err)
+	}
+	return row.toModel(), nil
 }
 
 // UpdateVote persists every mutable column of v.
 func (s *Store) UpdateVote(ctx context.Context, v *Vote) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE votes SET mode_id = ?, mode_name = ?, left_image_id = ?, right_image_id = ?,
-		 winner_image_id = ?, loser_image_id = ?, value = ?, min_value = ?, max_value = ?,
-		 weight = ?, metadata = ?, duration_ms = ? WHERE id = ?`,
-		v.ModeID, v.ModeName, v.LeftImageID, v.RightImageID,
-		v.WinnerImageID, v.LoserImageID, v.Value, v.MinValue, v.MaxValue,
-		v.Weight, v.Metadata, v.DurationMs, v.ID)
-	return err
+	err := s.dbWithContext(ctx).Model(&voteRow{}).
+		Where("id = ?", v.ID).
+		Updates(map[string]any{
+			"mode_id":         v.ModeID,
+			"mode_name":       v.ModeName,
+			"left_image_id":   v.LeftImageID,
+			"right_image_id":  v.RightImageID,
+			"winner_image_id": v.WinnerImageID,
+			"loser_image_id":  v.LoserImageID,
+			"value":           v.Value,
+			"min_value":       v.MinValue,
+			"max_value":       v.MaxValue,
+			"weight":          v.Weight,
+			"metadata":        v.Metadata,
+			"duration_ms":     v.DurationMs,
+			"vote_speed":      v.VoteSpeed,
+		}).Error
+	return translateError(err)
+}
+
+// VoteDurationHistory returns how many votes an identity has cast and the
+// durations of those votes (newest first, capped). It is the basis for the
+// dynamic vote-speed calibration.
+func (s *Store) VoteDurationHistory(ctx context.Context, userID *int64, anonymousID string, excludeVoteID int64) (int, []int64, error) {
+	base := func() *gorm.DB {
+		q := s.dbWithContext(ctx).Model(&voteRow{})
+		if excludeVoteID > 0 {
+			q = q.Where("id <> ?", excludeVoteID)
+		}
+		if userID != nil {
+			return q.Where("user_id = ?", *userID)
+		}
+		if anonymousID == "" {
+			return q.Where("1 = 0")
+		}
+		return q.Where("anonymous_id = ? AND user_id IS NULL", anonymousID)
+	}
+
+	var total int64
+	if err := base().Count(&total).Error; err != nil {
+		return 0, nil, err
+	}
+
+	var rows []voteRow
+	if err := base().
+		Select("duration_ms").
+		Where("duration_ms IS NOT NULL").
+		Order("created_at DESC, id DESC").
+		Limit(voteSpeedSampleLimit).
+		Find(&rows).Error; err != nil {
+		return 0, nil, err
+	}
+	durations := make([]int64, 0, len(rows))
+	for i := range rows {
+		if rows[i].DurationMs != nil {
+			durations = append(durations, *rows[i].DurationMs)
+		}
+	}
+	return int(total), durations, nil
 }
 
 // ClaimAnonymousVotes moves votes cast from a device-local anonymous identity
@@ -178,36 +177,31 @@ func (s *Store) ClaimAnonymousVotes(ctx context.Context, userID int64, username 
 	if len(anonymousIDs) == 0 {
 		return 0, nil
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
 	var claimed int64
-	for _, anonymousID := range anonymousIDs {
-		res, err := tx.ExecContext(ctx,
-			`UPDATE votes SET user_id = ?, username = ?
-			 WHERE anonymous_id = ? AND anonymous_id <> '' AND user_id IS NULL`,
-			userID, username, anonymousID)
-		if err != nil {
-			return 0, err
+	err := s.dbWithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, anonymousID := range anonymousIDs {
+			res := tx.Model(&voteRow{}).
+				Where("anonymous_id = ? AND anonymous_id <> '' AND user_id IS NULL", anonymousID).
+				Updates(map[string]any{"user_id": userID, "username": username})
+			if res.Error != nil {
+				return res.Error
+			}
+			claimed += res.RowsAffected
 		}
-		if n, _ := res.RowsAffected(); n > 0 {
-			claimed += n
-		}
-	}
-	if err := tx.Commit(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return 0, err
 	}
 	return claimed, nil
 }
 
 func (s *Store) DeleteVote(ctx context.Context, id int64) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM votes WHERE id = ?`, id)
-	if err != nil {
-		return err
+	res := s.dbWithContext(ctx).Where("id = ?", id).Delete(&voteRow{})
+	if res.Error != nil {
+		return res.Error
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	if res.RowsAffected == 0 {
 		return ErrNotFound
 	}
 	return nil
@@ -217,27 +211,19 @@ func (s *Store) DeleteVotesByIDs(ctx context.Context, ids []int64) (int64, error
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
 	var deleted int64
-	for start := 0; start < len(ids); start += 400 {
-		end := min(start+400, len(ids))
-		chunk := ids[start:end]
-		args := make([]any, len(chunk))
-		for i, id := range chunk {
-			args[i] = id
+	err := s.dbWithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for start := 0; start < len(ids); start += 400 {
+			end := min(start+400, len(ids))
+			res := tx.Where("id IN ?", ids[start:end]).Delete(&voteRow{})
+			if res.Error != nil {
+				return res.Error
+			}
+			deleted += res.RowsAffected
 		}
-		res, err := tx.ExecContext(ctx, `DELETE FROM votes WHERE id IN (`+placeholders(len(chunk))+`)`, args...)
-		if err != nil {
-			return 0, err
-		}
-		n, _ := res.RowsAffected()
-		deleted += n
-	}
-	if err := tx.Commit(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return 0, err
 	}
 	return deleted, nil
@@ -247,8 +233,6 @@ func (s *Store) DeleteVotesByIDs(ctx context.Context, ids []int64) (int64, error
 // pagination. Author/TitleRegex filters need image metadata and are applied
 // in Go, which keeps regex semantics identical across SQLite builds.
 func (s *Store) ListVotes(ctx context.Context, f VoteFilter) ([]Vote, int, error) {
-	where, args := buildVoteWhere(f)
-
 	var re *regexp.Regexp
 	if pattern := strings.TrimSpace(f.TitleRegex); pattern != "" {
 		var err error
@@ -264,21 +248,24 @@ func (s *Store) ListVotes(ctx context.Context, f VoteFilter) ([]Vote, int, error
 		defaultLimit = clampLimit(f.Limit, 100)
 	}
 
-	query := `SELECT ` + voteColumns + ` FROM votes` + where + ` ORDER BY created_at DESC, id DESC`
-	if !complexFilter {
-		var total int
-		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM votes`+where, args...).Scan(&total); err != nil {
-			return nil, 0, err
-		}
-		if !fetchAll {
-			query += ` LIMIT ? OFFSET ?`
-			args = append(args, defaultLimit, max(f.Offset, 0))
-		}
-		votes, err := s.queryVotes(ctx, query, args)
-		return votes, total, err
+	query := func() *gorm.DB {
+		return buildVoteQuery(s.dbWithContext(ctx), f)
 	}
 
-	votes, err := s.queryVotes(ctx, query, args)
+	if !complexFilter {
+		var total int64
+		if err := query().Count(&total).Error; err != nil {
+			return nil, 0, err
+		}
+		q := query().Order("created_at DESC, id DESC")
+		if !fetchAll {
+			q = q.Limit(defaultLimit).Offset(max(f.Offset, 0))
+		}
+		votes, err := findVotes(q)
+		return votes, int(total), err
+	}
+
+	votes, err := findVotes(query().Order("created_at DESC, id DESC"))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -322,52 +309,36 @@ func (s *Store) ListVotes(ctx context.Context, f VoteFilter) ([]Vote, int, error
 	return filtered, total, nil
 }
 
-// getAllImagesByIDs intentionally includes soft-deleted rows for filtering.
-func (s *Store) getAllImagesByIDs(ctx context.Context, ids []string) (map[string]*Image, error) {
-	return s.loadImagesByIDs(ctx, ids, true)
-}
-
-func (s *Store) queryVotes(ctx context.Context, query string, args []any) ([]Vote, error) {
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
+func findVotes(q *gorm.DB) ([]Vote, error) {
+	var rows []voteRow
+	if err := q.Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := make([]Vote, 0)
-	for rows.Next() {
-		v, err := scanVote(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, *v)
+	out := make([]Vote, 0, len(rows))
+	for i := range rows {
+		out = append(out, *rows[i].toModel())
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
-func buildVoteWhere(f VoteFilter) (string, []any) {
-	where := ` WHERE 1=1`
-	args := make([]any, 0, 6)
+func buildVoteQuery(db *gorm.DB, f VoteFilter) *gorm.DB {
+	q := db.Model(&voteRow{})
 	if f.From != nil {
-		where += ` AND created_at >= ?`
-		args = append(args, *f.From)
+		q = q.Where("created_at >= ?", *f.From)
 	}
 	if f.To != nil {
-		where += ` AND created_at <= ?`
-		args = append(args, *f.To)
+		q = q.Where("created_at <= ?", *f.To)
 	}
 	if username := strings.TrimSpace(f.Username); username != "" {
-		where += ` AND username = ? COLLATE NOCASE`
-		args = append(args, username)
+		q = q.Where("username = ? COLLATE NOCASE", username)
 	}
 	if mode := strings.TrimSpace(f.Mode); mode != "" {
-		where += ` AND (mode_name = ? COLLATE NOCASE OR CAST(mode_id AS TEXT) = ?)`
-		args = append(args, mode, mode)
+		q = q.Where("(mode_name = ? COLLATE NOCASE OR CAST(mode_id AS TEXT) = ?)", mode, mode)
 	}
 	if imageID := strings.TrimSpace(f.ImageID); imageID != "" {
-		where += ` AND (left_image_id = ? OR right_image_id = ?)`
-		args = append(args, imageID, imageID)
+		q = q.Where("(left_image_id = ? OR right_image_id = ?)", imageID, imageID)
 	}
-	return where, args
+	return q
 }
 
 func authorMatches(left, right *Image, author string) bool {

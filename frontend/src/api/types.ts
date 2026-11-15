@@ -80,6 +80,8 @@ export interface Vote {
   user?: { id: number; username: string; displayName: string };
   metadata: Record<string, unknown>;
   durationMs?: number;
+  /** Dynamic 1..10 response-speed score (5.5 = neutral) used to weight the vote. */
+  voteSpeed: number;
   createdAt: string;
 }
 
