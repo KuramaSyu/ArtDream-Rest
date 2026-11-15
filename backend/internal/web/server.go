@@ -36,6 +36,7 @@ func (s *Server) Router() *gin.Engine {
 	api.GET("/images/rank", s.optionalAuth(), s.rankImages)
 	api.GET("/images/smart", s.optionalAuth(), s.smartImages)
 	api.GET("/rank/modes", s.listVoteModes)
+	api.POST("/rank/vote", s.optionalAuth(), s.castVote)
 	api.GET("/images/:id", s.serveImage)
 	api.GET("/images/:id/meta", s.imageMeta)
 
@@ -45,7 +46,7 @@ func (s *Server) Router() *gin.Engine {
 		authed.PATCH("/auth/me", s.updateMe)
 		authed.POST("/auth/logout", s.logout)
 		authed.POST("/images/claim", s.claimImages)
-		authed.POST("/rank/vote", s.castVote)
+		authed.POST("/rank/claim", s.claimVotes)
 		authed.GET("/rank/me", s.myVotes)
 	}
 

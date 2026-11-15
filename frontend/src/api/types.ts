@@ -239,6 +239,15 @@ export interface VotePayload {
   maxValue?: number;
   metadata?: Record<string, unknown>;
   durationMs?: number;
+  /** Device-local anonymous identity, required when no account is signed in. */
+  anonymousId?: string;
+}
+
+export interface VoteClaimResponse {
+  claimed: number;
+  count: number;
+  /** Present when the backend distinguishes newly claimed votes from matches. */
+  claim?: number;
 }
 
 export interface VoteUpdatePayload {

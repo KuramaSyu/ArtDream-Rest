@@ -126,6 +126,8 @@ type VotePayload struct {
 	MaxValue     *int           `json:"maxValue,omitempty" example:"5"`
 	Metadata     map[string]any `json:"metadata,omitempty"`
 	DurationMs   *int64         `json:"durationMs,omitempty" example:"1234"`
+	// AnonymousID is the device-local secret used when no account is signed in.
+	AnonymousID string `json:"anonymousId,omitempty" example:"6f1c..."`
 }
 
 // VoteDTO mirrors voteDTO for swag. The runtime DTO uses json.RawMessage for

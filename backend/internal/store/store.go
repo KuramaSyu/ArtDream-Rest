@@ -124,6 +124,7 @@ CREATE TABLE IF NOT EXISTS votes (
 	weight          REAL NOT NULL DEFAULT 1,
 	user_id         INTEGER,
 	username        TEXT NOT NULL DEFAULT '',
+	anonymous_id    TEXT NOT NULL DEFAULT '',
 	metadata        TEXT NOT NULL DEFAULT '{}',
 	duration_ms     INTEGER,
 	created_at      INTEGER NOT NULL
@@ -140,6 +141,14 @@ CREATE INDEX IF NOT EXISTS votes_mode_idx ON votes(mode_id);
 
 	// Databases created before the submit page existed need the claim column.
 	if err := s.ensureColumn(ctx, "images", "claim_token", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// Anonymous votes carry a device-local secret so they can be attached to
+	// an account after the visitor signs in or registers.
+	if err := s.ensureColumn(ctx, "votes", "anonymous_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS votes_anonymous_idx ON votes(anonymous_id)`); err != nil {
 		return err
 	}
 	// Public-service provenance was added later; existing images stay private.

@@ -222,6 +222,11 @@ definitions:
     type: object
   web.VotePayload:
     properties:
+      anonymousId:
+        description: AnonymousID is the device-local secret used when no account is
+          signed in.
+        example: 6f1c...
+        type: string
       durationMs:
         example: 1234
         type: integer
@@ -612,6 +617,27 @@ definitions:
         type: string
       image:
         $ref: '#/definitions/web.imageDTO'
+    type: object
+  web.voteClaimRequest:
+    properties:
+      anonymousId:
+        type: string
+      anonymousIds:
+        items:
+          type: string
+        type: array
+      token:
+        type: string
+      tokens:
+        items:
+          type: string
+        type: array
+      voterId:
+        type: string
+      voterIds:
+        items:
+          type: string
+        type: array
     type: object
   web.voteModeRequest:
     properties:
@@ -2389,6 +2415,47 @@ paths:
       summary: Smart image feed with ranking fallback
       tags:
       - rank
+  /rank/claim:
+    post:
+      consumes:
+      - application/json
+      description: Moves votes cast from this device's anonymous identities under
+        the signed-in account. Clients send the device-local anonymous ids they kept
+        in local storage.
+      parameters:
+      - description: Anonymous voter ids to claim
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/web.voteClaimRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              format: int64
+              type: integer
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/web.apiError'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/web.apiError'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/web.apiError'
+      security:
+      - BearerAuth: []
+      summary: Claim anonymous votes
+      tags:
+      - rank
   /rank/modes:
     get:
       description: Returns the available voting scales (binary duel modes and value-scaled
@@ -2413,10 +2480,11 @@ paths:
     post:
       consumes:
       - application/json
-      description: Compares two images. The body accepts the canonical field names
-        shown below as well as several aliases (e.g. `left`, `right`, `imageA`, `imageB`,
-        `score`). Binary modes use `winner` (left/right/tie); value-scaled modes use
-        `value`.
+      description: Compares two images. Authentication is optional; anonymous voters
+        send a device-local `anonymousId` so their history can be claimed after sign-in.
+        The body accepts the canonical field names shown below as well as several
+        aliases (e.g. `left`, `right`, `imageA`, `imageB`, `score`). Binary modes
+        use `winner` (left/right/tie); value-scaled modes use `value`.
       parameters:
       - description: Vote details
         in: body

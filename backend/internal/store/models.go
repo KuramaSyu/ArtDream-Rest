@@ -49,22 +49,25 @@ type VoteMode struct {
 
 // Vote is a single comparison between two images.
 type Vote struct {
-	ID            int64     `json:"id"`
-	ModeID        int64     `json:"modeId"`
-	ModeName      string    `json:"modeName"`
-	LeftImageID   string    `json:"leftImageId"`
-	RightImageID  string    `json:"rightImageId"`
-	WinnerImageID *string   `json:"winnerImageId,omitempty"`
-	LoserImageID  *string   `json:"loserImageId,omitempty"`
-	Value         *int      `json:"value,omitempty"`
-	MinValue      int       `json:"minValue"`
-	MaxValue      int       `json:"maxValue"`
-	Weight        float64   `json:"weight"`
-	UserID        *int64    `json:"userId,omitempty"`
-	Username      string    `json:"username"`
-	Metadata      string    `json:"metadata"`
-	DurationMs    *int64    `json:"durationMs,omitempty"`
-	CreatedAt     time.Time `json:"createdAt"`
+	ID            int64   `json:"id"`
+	ModeID        int64   `json:"modeId"`
+	ModeName      string  `json:"modeName"`
+	LeftImageID   string  `json:"leftImageId"`
+	RightImageID  string  `json:"rightImageId"`
+	WinnerImageID *string `json:"winnerImageId,omitempty"`
+	LoserImageID  *string `json:"loserImageId,omitempty"`
+	Value         *int    `json:"value,omitempty"`
+	MinValue      int     `json:"minValue"`
+	MaxValue      int     `json:"maxValue"`
+	Weight        float64 `json:"weight"`
+	UserID        *int64  `json:"userId,omitempty"`
+	Username      string  `json:"username"`
+	// AnonymousID is the device-local secret attached to votes cast without
+	// an account. Claiming it moves the votes under a real user.
+	AnonymousID string    `json:"-"`
+	Metadata    string    `json:"metadata"`
+	DurationMs  *int64    `json:"durationMs,omitempty"`
+	CreatedAt   time.Time `json:"createdAt"`
 }
 
 // UserFilter is used by the admin user listing.

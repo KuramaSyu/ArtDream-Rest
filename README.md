@@ -100,6 +100,11 @@ megapixels, and currently **must be landscape** (width > height).
 - Admin-only: `GET/POST /users`, `PATCH/DELETE /users/:id`. The last admin
   cannot be demoted/deleted; you cannot delete your own account.
 
+Login is **optional** for ranking. Anonymous visitors can vote; the vote is
+still uploaded immediately. The browser keeps a local copy plus a random
+device-local `anonymousId`, and the next sign-in/registration claims those
+votes with `POST /rank/claim`.
+
 Session tokens are stored in SQLite and sent as
 `Authorization: Bearer <token>` (or `X-Session-Token`).
 
@@ -115,6 +120,11 @@ The artist name is independent from the account username.
   attach those submissions to the account (`POST /images/claim`). Claim tokens
   are cleared once used, so knowing a public image id is not enough to claim it.
 - The artist name and title chosen at upload time never change when claiming.
+- Ranking works the same way without forcing an account: votes are uploaded
+  anonymously with a device-local `anonymousId` and mirrored in
+  `localStorage`. Signing in uploads any pending local votes and claims all
+  previously uploaded anonymous votes (`POST /rank/claim`). Local history is
+  capped and unsynced/unclaimed entries are never trimmed away.
 - Every upload carries a **private by default** flag. Uploaders can mark an
   image as coming from a public service and optionally name that service
   (`fromPublicService`, `serviceName`). No flag means a private image.
@@ -128,7 +138,7 @@ Two tables hold the extensibility:
 - `votes` — mode id/name, `left_image_id`, `right_image_id`, derived
   `winner_image_id` / `loser_image_id`, raw `value`, the effective
   `min_value`/`max_value`, a normalized `weight`, `user_id`, `username`,
-  metadata JSON, duration and timestamp.
+  an optional `anonymous_id`, metadata JSON, duration and timestamp.
 
 Modes can be edited or extended at runtime; each vote stores the scale actually
 used, so changing a mode's default later does not rewrite history.
@@ -275,6 +285,7 @@ All routes are under `/api/v1`. Responses are JSON except image bytes.
 | GET | `/images/:id?format=webp|png|jpg&w=&h=&quality=&download=true&original=true` | Image bytes; default WebP capped to 1920px long edge / 1080p. `original=true` opts into the pristine upload |
 | GET | `/images/:id/meta` | Image metadata |
 | GET | `/rank/modes` | Available vote modes |
+| POST | `/rank/vote` | Cast a ranking; auth optional. Anonymous requests send `anonymousId` (see below) |
 | POST | `/images` | Multipart upload (`image`, `author`, optional `title`, `fromPublicService`, `serviceName`). Auth optional. Landscape only. |
 
 Image request filters (available on `/images/random`, `/images/author` and
@@ -328,7 +339,7 @@ Upload response:
 | Method | Path | Notes |
 | --- | --- | --- |
 | POST | `/images/claim` | `{claims:[{id, token}]}` — link anonymous uploads to the account |
-| POST | `/rank/vote` | See below |
+| POST | `/rank/claim` | `{anonymousIds:[...]}` — link anonymous votes to the account; only unowned votes are touched |
 | GET | `/rank/me?time=&amount=&offset=` | The signed-in user's votes |
 
 Vote request (flexible key spellings are accepted — `leftImageId`, `left-img`,
@@ -342,6 +353,7 @@ Vote request (flexible key spellings are accepted — `leftImageId`, `left-img`,
   "value": 2,
   "minValue": 1,
   "maxValue": 5,
+  "anonymousId": "6f1c…device-local secret…",
   "metadata": { "ui": "image-click", "side": "left" }
 }
 ```

@@ -15,6 +15,7 @@ import type {
   TimeRange,
   User,
   Vote,
+  VoteClaimResponse,
   VoteMode,
   VotePayload,
   VoteUpdatePayload,
@@ -218,7 +219,13 @@ export const api = {
   modes: () => request<VoteMode[]>("/rank/modes"),
 
   vote: (body: VotePayload) =>
-    request<Vote>("/rank/vote", { method: "POST", body }),
+    request<Vote>("/rank/vote", { method: "POST", body, skipAuthHandler: true }),
+
+  claimVotes: (anonymousIds: string[]) =>
+    request<VoteClaimResponse>("/rank/claim", {
+      method: "POST",
+      body: { anonymousIds },
+    }),
 
   myVotes: (query: { time?: TimeRange; amount?: number; offset?: number } = {}) =>
     request<ListResponse<Vote>>("/rank/me", { query }),

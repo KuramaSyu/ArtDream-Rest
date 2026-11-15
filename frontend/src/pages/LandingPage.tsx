@@ -161,10 +161,6 @@ export function LandingPage() {
   };
 
   const start = () => {
-    if (!user) {
-      navigate("/login?next=/rank");
-      return;
-    }
     navigate("/rank");
   };
 

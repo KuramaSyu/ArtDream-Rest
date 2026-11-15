@@ -10,6 +10,7 @@ import {
 import { api, ApiError } from "../api/client";
 import { getToken, onUnauthorized, setToken } from "../api/session";
 import type { User } from "../api/types";
+import { syncLocalRankingsWithAccount } from "../utils/localRankings";
 
 interface Credentials {
   username: string;
@@ -81,6 +82,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     return () => onUnauthorized(null);
   }, []);
+
+  // Whenever a session is established (sign-in, registration, restored tab
+  // session), attach the rankings this device saved anonymously. A reconnect
+  // also retries votes that could not be uploaded the first time.
+  useEffect(() => {
+    if (!user) return;
+    const sync = () => {
+      void syncLocalRankingsWithAccount().catch(() => undefined);
+    };
+    sync();
+    window.addEventListener("online", sync);
+    return () => window.removeEventListener("online", sync);
+  }, [user]);
 
   const login = useCallback(
     async (username: string, password: string) => {

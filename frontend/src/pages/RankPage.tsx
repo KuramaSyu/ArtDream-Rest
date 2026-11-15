@@ -46,6 +46,11 @@ import { PageShell } from "../components/PageShell";
 import { useToast } from "../components/Feedback";
 import { useStageImages } from "../theme/ThemeHost";
 import { useFrontendConfig } from "../config/FrontendConfig";
+import {
+  getAnonymousVoterId,
+  markLocalRankingSynced,
+  recordLocalRanking,
+} from "../utils/localRankings";
 
 type Side = "left" | "right";
 
@@ -468,14 +473,20 @@ export function RankPage() {
       if (pair.length < 2 || voting) return;
       const [left, right] = pair;
       if (!left || !right) return;
+      // Every ranking is uploaded right away, even without an account. The
+      // local copy carries the anonymous identity so it can be claimed later.
+      const votePayload: VotePayload = {
+        ...payload,
+        leftImageId: left.id,
+        rightImageId: right.id,
+        durationMs: Date.now() - startedAt.current,
+        anonymousId: getAnonymousVoterId(),
+      };
+      const localEntry = recordLocalRanking(votePayload, { claimed: Boolean(user) });
       setVoting(true);
       try {
-        await api.vote({
-          ...payload,
-          leftImageId: left.id,
-          rightImageId: right.id,
-          durationMs: Date.now() - startedAt.current,
-        });
+        await api.vote(votePayload);
+        markLocalRankingSynced(localEntry.localId, Boolean(user));
         recent.current = [left.id, right.id, ...recent.current.filter((id) => id !== left.id && id !== right.id)].slice(0, 12);
         setCastCount((count) => count + 1);
         const mid = ((payload.minValue ?? 0) + (payload.maxValue ?? 0)) / 2;
@@ -512,7 +523,7 @@ export function RankPage() {
         setVoting(false);
       }
     },
-    [loadPair, notify, pair, voting],
+    [loadPair, notify, pair, user, voting],
   );
 
   const pick = (side: Side) => {
@@ -1019,8 +1030,9 @@ export function RankPage() {
       {!user && (
         <Box sx={{ mt: 2.5, textAlign: "center" }}>
           <Typography variant="body2" color="text.secondary">
-            Votes are stored per account. <Button onClick={() => navigate("/login?next=/rank")}>Sign in</Button>{" "}
-            to keep yours.
+            Rankings are saved on this device and uploaded right away.{" "}
+            <Button onClick={() => navigate("/login?next=/rank")}>Sign in</Button>{" "}
+            to link them to your account.
           </Typography>
         </Box>
       )}

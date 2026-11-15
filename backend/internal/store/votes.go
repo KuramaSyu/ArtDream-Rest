@@ -96,7 +96,7 @@ func (s *Store) DeleteVoteMode(ctx context.Context, id int64) error {
 
 const voteColumns = `id, mode_id, mode_name, left_image_id, right_image_id,
 	winner_image_id, loser_image_id, value, min_value, max_value, weight,
-	user_id, username, metadata, duration_ms, created_at`
+	user_id, username, anonymous_id, metadata, duration_ms, created_at`
 
 func scanVote(row interface{ Scan(...any) error }) (*Vote, error) {
 	var v Vote
@@ -105,7 +105,7 @@ func scanVote(row interface{ Scan(...any) error }) (*Vote, error) {
 	var created int64
 	if err := row.Scan(&v.ID, &v.ModeID, &v.ModeName, &v.LeftImageID, &v.RightImageID,
 		&winner, &loser, &value, &v.MinValue, &v.MaxValue, &v.Weight,
-		&userID, &v.Username, &v.Metadata, &duration, &created); err != nil {
+		&userID, &v.Username, &v.AnonymousID, &v.Metadata, &duration, &created); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -143,11 +143,11 @@ func (s *Store) CreateVote(ctx context.Context, v *Vote) error {
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO votes (mode_id, mode_name, left_image_id, right_image_id,
 		 winner_image_id, loser_image_id, value, min_value, max_value, weight,
-		 user_id, username, metadata, duration_ms, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 user_id, username, anonymous_id, metadata, duration_ms, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		v.ModeID, v.ModeName, v.LeftImageID, v.RightImageID,
 		v.WinnerImageID, v.LoserImageID, v.Value, v.MinValue, v.MaxValue, v.Weight,
-		v.UserID, v.Username, v.Metadata, v.DurationMs, timeToUnix(v.CreatedAt))
+		v.UserID, v.Username, v.AnonymousID, v.Metadata, v.DurationMs, timeToUnix(v.CreatedAt))
 	if err != nil {
 		return err
 	}
@@ -169,6 +169,37 @@ func (s *Store) UpdateVote(ctx context.Context, v *Vote) error {
 		v.WinnerImageID, v.LoserImageID, v.Value, v.MinValue, v.MaxValue,
 		v.Weight, v.Metadata, v.DurationMs, v.ID)
 	return err
+}
+
+// ClaimAnonymousVotes moves votes cast from a device-local anonymous identity
+// under a real account. Only unowned votes are touched, so a claim token that
+// leaks cannot steal somebody else's history.
+func (s *Store) ClaimAnonymousVotes(ctx context.Context, userID int64, username string, anonymousIDs []string) (int64, error) {
+	if len(anonymousIDs) == 0 {
+		return 0, nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	var claimed int64
+	for _, anonymousID := range anonymousIDs {
+		res, err := tx.ExecContext(ctx,
+			`UPDATE votes SET user_id = ?, username = ?
+			 WHERE anonymous_id = ? AND anonymous_id <> '' AND user_id IS NULL`,
+			userID, username, anonymousID)
+		if err != nil {
+			return 0, err
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			claimed += n
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return claimed, nil
 }
 
 func (s *Store) DeleteVote(ctx context.Context, id int64) error {

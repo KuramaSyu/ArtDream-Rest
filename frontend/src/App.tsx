@@ -82,14 +82,7 @@ function AnimatedRoutes() {
           <Route path="/launch" element={<Navigate to="/" replace />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/submit" element={<SubmitPage />} />
-          <Route
-            path="/rank"
-            element={
-              <RequireAuth>
-                <RankPage />
-              </RequireAuth>
-            }
-          />
+          <Route path="/rank" element={<RankPage />} />
           <Route
             path="/library"
             element={

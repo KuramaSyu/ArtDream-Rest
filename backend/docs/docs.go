@@ -2622,6 +2622,67 @@ const docTemplate = `{
                 }
             }
         },
+        "/rank/claim": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Moves votes cast from this device's anonymous identities under the signed-in account. Clients send the device-local anonymous ids they kept in local storage.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "rank"
+                ],
+                "summary": "Claim anonymous votes",
+                "parameters": [
+                    {
+                        "description": "Anonymous voter ids to claim",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/web.voteClaimRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "integer",
+                                "format": "int64"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/web.apiError"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/web.apiError"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/web.apiError"
+                        }
+                    }
+                }
+            }
+        },
         "/rank/modes": {
             "get": {
                 "description": "Returns the available voting scales (binary duel modes and value-scaled modes).",
@@ -2658,7 +2719,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Compares two images. The body accepts the canonical field names shown below as well as several aliases (e.g. ` + "`" + `left` + "`" + `, ` + "`" + `right` + "`" + `, ` + "`" + `imageA` + "`" + `, ` + "`" + `imageB` + "`" + `, ` + "`" + `score` + "`" + `). Binary modes use ` + "`" + `winner` + "`" + ` (left/right/tie); value-scaled modes use ` + "`" + `value` + "`" + `.",
+                "description": "Compares two images. Authentication is optional; anonymous voters send a device-local ` + "`" + `anonymousId` + "`" + ` so their history can be claimed after sign-in. The body accepts the canonical field names shown below as well as several aliases (e.g. ` + "`" + `left` + "`" + `, ` + "`" + `right` + "`" + `, ` + "`" + `imageA` + "`" + `, ` + "`" + `imageB` + "`" + `, ` + "`" + `score` + "`" + `). Binary modes use ` + "`" + `winner` + "`" + ` (left/right/tie); value-scaled modes use ` + "`" + `value` + "`" + `.",
                 "consumes": [
                     "application/json"
                 ],
@@ -3382,6 +3443,11 @@ const docTemplate = `{
         "web.VotePayload": {
             "type": "object",
             "properties": {
+                "anonymousId": {
+                    "description": "AnonymousID is the device-local secret used when no account is signed in.",
+                    "type": "string",
+                    "example": "6f1c..."
+                },
                 "durationMs": {
                     "type": "integer",
                     "example": 1234
@@ -3963,6 +4029,38 @@ const docTemplate = `{
                 },
                 "image": {
                     "$ref": "#/definitions/web.imageDTO"
+                }
+            }
+        },
+        "web.voteClaimRequest": {
+            "type": "object",
+            "properties": {
+                "anonymousId": {
+                    "type": "string"
+                },
+                "anonymousIds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "token": {
+                    "type": "string"
+                },
+                "tokens": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "voterId": {
+                    "type": "string"
+                },
+                "voterIds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },

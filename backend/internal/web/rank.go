@@ -32,6 +32,7 @@ type voteRequest struct {
 	Metadata         map[string]any
 	MetadataProvided bool
 	DurationMs       *int64
+	AnonymousID      string
 }
 
 func firstString(m map[string]json.RawMessage, keys ...string) (string, bool) {
@@ -123,6 +124,9 @@ func (r *voteRequest) UnmarshalJSON(data []byte) error {
 	if v, ok := firstInt64(raw, "durationMs", "duration_ms", "duration-ms", "timeMs", "time_ms", "elapsed"); ok {
 		r.DurationMs = v
 	}
+	if v, ok := firstString(raw, "anonymousId", "anonymous_id", "voterId", "voter_id", "anonymousToken", "voterToken"); ok {
+		r.AnonymousID = v
+	}
 	for _, k := range []string{"metadata", "meta", "context"} {
 		if rawMeta, ok := raw[k]; ok {
 			_ = json.Unmarshal(rawMeta, &r.Metadata)
@@ -168,7 +172,7 @@ func resolveVoteMode(c *gin.Context, modeID int64, modeName string) (*store.Vote
 
 // castVote godoc
 // @Summary Cast a vote
-// @Description Compares two images. The body accepts the canonical field names shown below as well as several aliases (e.g. `left`, `right`, `imageA`, `imageB`, `score`). Binary modes use `winner` (left/right/tie); value-scaled modes use `value`.
+// @Description Compares two images. Authentication is optional; anonymous voters send a device-local `anonymousId` so their history can be claimed after sign-in. The body accepts the canonical field names shown below as well as several aliases (e.g. `left`, `right`, `imageA`, `imageB`, `score`). Binary modes use `winner` (left/right/tie); value-scaled modes use `value`.
 // @Tags rank
 // @Security BearerAuth
 // @Accept json
@@ -240,6 +244,11 @@ func (s *Server) castVote(c *gin.Context) {
 		return
 	}
 
+	anonymousID, validAnonymousID := normalizeAnonymousID(req.AnonymousID)
+	if req.AnonymousID != "" && !validAnonymousID {
+		badRequest(c, "anonymousId must be 16-128 letters, digits, dashes or underscores.")
+		return
+	}
 	v := &store.Vote{
 		ModeID:       mode.ID,
 		ModeName:     mode.Name,
@@ -247,10 +256,18 @@ func (s *Server) castVote(c *gin.Context) {
 		RightImageID: req.RightImageID,
 		MinValue:     minV,
 		MaxValue:     maxV,
-		UserID:       &user.ID,
-		Username:     user.Username,
+		AnonymousID:  anonymousID,
 		DurationMs:   req.DurationMs,
 		Metadata:     encodeMetadata(req.Metadata),
+	}
+	if user != nil {
+		v.UserID = &user.ID
+		v.Username = user.Username
+	} else {
+		if anonymousID == "" {
+			badRequest(c, "anonymousId is required when voting without an account.")
+			return
+		}
 	}
 	if req.MetadataProvided && len(v.Metadata) > 8<<10 {
 		badRequest(c, "Metadata is too large (max 8 KiB).")
@@ -266,6 +283,90 @@ func (s *Server) castVote(c *gin.Context) {
 	}
 	s.invalidateRankingCache()
 	c.JSON(http.StatusCreated, voteToDTO(v, images))
+}
+
+func normalizeAnonymousID(raw string) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	if len(raw) < 16 || len(raw) > 128 {
+		return "", false
+	}
+	for _, ch := range raw {
+		switch {
+		case ch >= 'a' && ch <= 'z':
+		case ch >= 'A' && ch <= 'Z':
+		case ch >= '0' && ch <= '9':
+		case ch == '-' || ch == '_':
+		default:
+			return "", false
+		}
+	}
+	return raw, true
+}
+
+type voteClaimRequest struct {
+	AnonymousID  string   `json:"anonymousId"`
+	AnonymousIDs []string `json:"anonymousIds"`
+	VoterID      string   `json:"voterId"`
+	VoterIDs     []string `json:"voterIds"`
+	Token        string   `json:"token"`
+	Tokens       []string `json:"tokens"`
+}
+
+// claimVotes godoc
+// @Summary Claim anonymous votes
+// @Description Moves votes cast from this device's anonymous identities under the signed-in account. Clients send the device-local anonymous ids they kept in local storage.
+// @Tags rank
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param payload body voteClaimRequest true "Anonymous voter ids to claim"
+// @Success 200 {object} map[string]int64
+// @Failure 400 {object} apiError
+// @Failure 401 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /rank/claim [post]
+func (s *Server) claimVotes(c *gin.Context) {
+	user := currentUser(c)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64<<10)
+	var req voteClaimRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		badRequest(c, "Could not parse the claim payload.")
+		return
+	}
+	rawIDs := append([]string{req.AnonymousID, req.VoterID, req.Token}, req.AnonymousIDs...)
+	rawIDs = append(rawIDs, req.VoterIDs...)
+	rawIDs = append(rawIDs, req.Tokens...)
+	seen := make(map[string]struct{}, len(rawIDs))
+	ids := make([]string, 0, len(rawIDs))
+	for _, raw := range rawIDs {
+		id, ok := normalizeAnonymousID(raw)
+		if !ok {
+			if strings.TrimSpace(raw) == "" {
+				continue
+			}
+			badRequest(c, "anonymousId must be 16-128 letters, digits, dashes or underscores.")
+			return
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		badRequest(c, "Provide at least one anonymousId.")
+		return
+	}
+	if len(ids) > 50 {
+		badRequest(c, "At most 50 anonymous identities can be claimed at once.")
+		return
+	}
+	claimed, err := s.Store.ClaimAnonymousVotes(c.Request.Context(), user.ID, user.Username, ids)
+	if err != nil {
+		serverError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"claimed": claimed, "count": claimed})
 }
 
 // applyVoteOutcome derives winner/loser/value/weight from either a categorical

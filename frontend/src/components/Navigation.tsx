@@ -40,7 +40,7 @@ interface NavItem {
 }
 
 const links: NavItem[] = [
-  { to: "/rank", label: "Rank", icon: Leaderboard, auth: true },
+  { to: "/rank", label: "Rank", icon: Leaderboard },
   { to: "/submit", label: "Submit", icon: UploadFile },
   { to: "/library", label: "Library", icon: Collections, auth: true },
   { to: "/admin", label: "Admin", icon: AdminPanelSettings, auth: true, admin: true },
