@@ -202,12 +202,16 @@ export function ThemeHost({ children }: { children: ReactNode }) {
     appliedKey.current = stageKey;
     const image = stageImages[Math.floor(Math.random() * stageImages.length)]!;
     let cancelled = false;
-    const cancel = scheduleIdle(() => {
+    const run = () => {
       if (cancelled) return;
       void applyImage(image).then((ok) => {
         if (!ok) failedKey.current = stageKey;
       });
-    });
+    };
+    // A single staged image is "the image on screen" (landing slideshow), so
+    // recolor immediately instead of waiting for an idle slot. Multi-image
+    // stages keep the deferred pick to stay cheap on busy pages.
+    const cancel = stageImages.length === 1 ? (run(), () => {}) : scheduleIdle(run);
     return () => {
       cancelled = true;
       cancel();

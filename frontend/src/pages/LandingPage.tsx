@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import {
   Alert,
   Box,
+  alpha,
+  useTheme,
   Button,
   CircularProgress,
   IconButton,
@@ -62,6 +64,7 @@ function readHomeQuality(): HomeQuality {
 export function LandingPage() {
   const { user, needsBootstrap, status, bootstrap } = useAuth();
   const navigate = useNavigate();
+  const theme = useTheme();
   const { notify } = useToast();
   const { config: frontendConfig, loading: frontendConfigLoading } = useFrontendConfig();
   const rankingAnonymized = frontendConfig.rankingAnonymized;
@@ -179,7 +182,11 @@ export function LandingPage() {
     <Box sx={{ position: "relative", minHeight: "100vh", overflow: "hidden" }}>
       <Navigation floating />
 
-      <Box className="landing-background" aria-hidden>
+      <Box
+        className="landing-background"
+        aria-hidden
+        sx={{ background: theme.palette.background.default }}
+      >
         <AnimatePresence initial={false}>
           {current && (
             <motion.div
@@ -201,6 +208,21 @@ export function LandingPage() {
             </motion.div>
           )}
         </AnimatePresence>
+        {/* Tint the slideshow with the palette of the current image. The
+            theme wash itself sits behind this full-bleed background, so
+            without this layer only small controls would show the change. */}
+        <Box
+          sx={{
+            position: "absolute",
+            inset: 0,
+            pointerEvents: "none",
+            background: `
+              radial-gradient(1100px 760px at 16% 8%, ${alpha(theme.palette.primary.main, 0.42)} 0%, transparent 62%),
+              radial-gradient(950px 820px at 88% 32%, ${alpha(theme.palette.secondary.main, 0.34)} 0%, transparent 66%),
+              linear-gradient(155deg, ${alpha(theme.palette.primary.dark, 0.22)} 0%, transparent 52%, ${alpha(theme.palette.secondary.dark, 0.26)} 100%)
+            `,
+          }}
+        />
         {!current && (
           <Box
             sx={{
@@ -254,6 +276,7 @@ export function LandingPage() {
                   fontWeight: 600,
                   letterSpacing: "-0.055em",
                   mb: 2,
+                  textShadow: `0 0 34px ${alpha(theme.palette.primary.main, 0.5)}, 0 8px 40px rgba(0,0,0,.4)`,
                 }}
               >
                 ArtDream
