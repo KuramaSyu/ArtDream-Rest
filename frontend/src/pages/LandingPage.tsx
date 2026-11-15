@@ -19,6 +19,7 @@ import {
   CloudUploadOutlined,
   HighQualityRounded,
   LoginRounded,
+  TodayRounded,
   Visibility,
   VisibilityOff,
 } from "@mui/icons-material";
@@ -65,6 +66,9 @@ export function LandingPage() {
   const { config: frontendConfig, loading: frontendConfigLoading } = useFrontendConfig();
   const rankingAnonymized = frontendConfig.rankingAnonymized;
   const [period, setPeriod] = useState<TimeRange>("day");
+  // Off by default: the leaderboard covers the selected period, not just
+  // uploads pushed today.
+  const [todayOnly, setTodayOnly] = useState(false);
   const [slides, setSlides] = useState<ImageItem[]>([]);
   const [index, setIndex] = useState(0);
   const [loadingSlides, setLoadingSlides] = useState(true);
@@ -81,11 +85,16 @@ export function LandingPage() {
     setLoadingSlides(true);
     (async () => {
       try {
-        const ranking = await api.rank({ time: period, amount: 8 });
-        let images = ranking.winners.map((winner) => winner.image);
-        if (images.length === 0) {
-          images = await api.randomImages(8);
-        }
+        const ranking = await api.rank({
+          time: period,
+          amount: 8,
+          todayOnly: todayOnly || undefined,
+        });
+        const ranked = ranking.winners.map((winner) => winner.image);
+        // An empty "today only" ranking means there is nothing from today to
+        // show; falling back to random images would break that filter.
+        const images =
+          ranked.length === 0 && !todayOnly ? await api.randomImages(8) : ranked;
         if (!cancelled) {
           setSlides(images);
           setIndex(0);
@@ -99,7 +108,7 @@ export function LandingPage() {
     return () => {
       cancelled = true;
     };
-  }, [period, reloadToken]);
+  }, [period, todayOnly, reloadToken]);
 
   useEffect(() => {
     if (slides.length < 2) return;
@@ -466,6 +475,42 @@ export function LandingPage() {
         onChange={setPeriod}
         leading={
           <>
+            <Tooltip
+              title={
+                todayOnly
+                  ? "Only images uploaded today — click to show all uploads"
+                  : "Only show images uploaded today"
+              }
+              enterDelay={400}
+            >
+              <Button
+                size="small"
+                aria-pressed={todayOnly}
+                onClick={() => {
+                  setTodayOnly((previous) => !previous);
+                  setIndex(0);
+                }}
+                startIcon={<TodayRounded sx={{ fontSize: 16 }} />}
+                sx={{
+                  minWidth: 0,
+                  px: 1.2,
+                  py: 0.25,
+                  borderRadius: 99,
+                  textTransform: "none",
+                  fontSize: "0.7rem",
+                  fontWeight: 600,
+                  color: todayOnly ? "#fff" : "rgba(255,255,255,.8)",
+                  background: todayOnly
+                    ? "rgba(255,255,255,.22)"
+                    : "rgba(10,9,15,.42)",
+                  border: "1px solid rgba(255,255,255,.14)",
+                  "& .MuiButton-startIcon": { mr: 0.5 },
+                  "&:hover": { background: "rgba(255,255,255,.1)", color: "#fff" },
+                }}
+              >
+                Today
+              </Button>
+            </Tooltip>
             <Tooltip
               title={`Backdrop resolution — ${quality === "original" ? "original" : `${quality}p`}`}
               enterDelay={400}

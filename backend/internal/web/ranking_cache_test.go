@@ -81,13 +81,13 @@ func TestRankingCacheKeyStableForRollingWindows(t *testing.T) {
 		ahpRankingStrategy{},
 		rangeWindow{Label: "day", From: &from1, To: &to1},
 		store.VoteFilter{},
-		policy, nil, "day", nil,
+		policy, nil, "day", nil, nil,
 	)
 	second := rankingCacheKey(
 		ahpRankingStrategy{},
 		rangeWindow{Label: "day", From: &from2, To: &to2},
 		store.VoteFilter{},
-		policy, nil, "day", nil,
+		policy, nil, "day", nil, nil,
 	)
 	if first != second {
 		t.Fatal("rolling windows should share a cache key")
@@ -97,13 +97,13 @@ func TestRankingCacheKeyStableForRollingWindows(t *testing.T) {
 		ahpRankingStrategy{},
 		rangeWindow{Label: "custom", From: &from2, To: &to2},
 		store.VoteFilter{},
-		policy, nil, "all", nil,
+		policy, nil, "all", nil, nil,
 	)
 	if rankingCacheKey(
 		ahpRankingStrategy{},
 		rangeWindow{Label: "custom", From: &from1, To: &to1},
 		store.VoteFilter{},
-		policy, nil, "all", nil,
+		policy, nil, "all", nil, nil,
 	) == custom {
 		t.Fatal("explicit custom ranges must not share a cache key")
 	}

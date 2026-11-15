@@ -110,6 +110,10 @@ export interface RankEntry {
   rotated?: boolean;
   /** True when the smart endpoint used its random fallback. */
   random?: boolean;
+  /** True when exploration mixed in this new, unvoted image. */
+  explore?: boolean;
+  /** Exploration weight applied to the entry's ordering key (>1 only). */
+  boost?: number;
 }
 
 export interface AdminRankEntry extends RankEntry {
@@ -183,6 +187,8 @@ export interface RankResponse {
   offset: number;
   total: number;
   totalVotes: number;
+  /** True when new, under-voted images were weighted in this ranking. */
+  explore?: boolean;
   winners: RankEntry[];
   rotation?: RankRotationInfo;
 }
@@ -227,6 +233,13 @@ export interface RankQuery extends ImageRequestFilters {
   rotationPercent?: number;
   /** Comma-separated image ids to omit from both periods and fallbacks. */
   exclude?: string;
+  /**
+   * Weight new and under-voted images. The backend enables this by default;
+   * pass false to get the pure vote leaderboard.
+   */
+  explore?: boolean;
+  /** Only rank images uploaded today (UTC). Disabled by default. */
+  todayOnly?: boolean;
 }
 
 export interface VotePayload {

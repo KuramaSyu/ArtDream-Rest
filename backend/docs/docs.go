@@ -2303,6 +2303,48 @@ const docTemplate = `{
                         "description": "Alias for rotationPercent",
                         "name": "changePercent",
                         "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Weight new and under-voted images (default true)",
+                        "name": "explore",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Alias for explore",
+                        "name": "preferNew",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Alias for explore",
+                        "name": "exploreNew",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Alias for explore",
+                        "name": "preferFresh",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Only rank images uploaded today (UTC)",
+                        "name": "todayOnly",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Alias for todayOnly",
+                        "name": "onlyToday",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Alias for todayOnly",
+                        "name": "today",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -2465,6 +2507,48 @@ const docTemplate = `{
                         "collectionFormat": "csv",
                         "description": "Image IDs to exclude from every ladder step",
                         "name": "exclude",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Weight new and under-voted images (default true)",
+                        "name": "explore",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Alias for explore",
+                        "name": "preferNew",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Alias for explore",
+                        "name": "exploreNew",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Alias for explore",
+                        "name": "preferFresh",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Only rank images uploaded today (UTC)",
+                        "name": "todayOnly",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Alias for todayOnly",
+                        "name": "onlyToday",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Alias for todayOnly",
+                        "name": "today",
                         "in": "query"
                     }
                 ],
@@ -3786,6 +3870,14 @@ const docTemplate = `{
                 "author": {
                     "type": "string"
                 },
+                "boost": {
+                    "description": "Boost is the exploration weight applied to the ordering key. It is\nomitted for entries that were not reweighted.",
+                    "type": "number"
+                },
+                "explore": {
+                    "description": "Explore marks an unrated image that exploration mixed into the ranking\nbecause it is new and has no votes in the requested window.",
+                    "type": "boolean"
+                },
                 "height": {
                     "type": "integer"
                 },
@@ -3901,6 +3993,10 @@ const docTemplate = `{
             "properties": {
                 "amount": {
                     "type": "integer"
+                },
+                "explore": {
+                    "description": "Explore reports whether new, under-voted images were weighted.",
+                    "type": "boolean"
                 },
                 "from": {
                     "type": "string"

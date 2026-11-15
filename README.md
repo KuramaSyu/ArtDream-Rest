@@ -254,6 +254,35 @@ Rotation entries added from the library without votes are marked
 library is too small to meet the requested share, `satisfied` is `false` and
 the endpoint still returns as many different images as it can.
 
+### New & under-voted images (exploration)
+
+`/images/rank` and `/images/smart` can give new and under-voted images a
+stronger weight so they get seen (and voted on). The backend weights images
+from the moment they are returned:
+
+- **freshness**: an upload counts as new for 7 days and its weight decays
+  linearly from `1` at upload time to `0` after that;
+- **rating**: an image counts as fully rated at 10 votes inside the requested
+  window; fewer votes add up to `1` at zero votes.
+
+The ordering weight is `Score × (1 + 0.6 × freshness + 0.4 × unrated)`, so a
+brand-new unvoted image is weighted twice as strong while old, well-voted
+images keep their exact score. Entries that are already ranked are reweighted,
+and a new image without votes in the window is mixed into the ranking as a
+`"explore": true` entry (at most a third of the ranking, capped at 12 images,
+placed around the leaderboard's mean score). The public `score`, `wins`,
+`losses`, `votes` fields keep reporting the pure vote result; boosted entries
+add a `"boost"` factor.
+
+Exploration is **enabled by default**. Disable it per request with
+`explore=false` (aliases `preferNew`, `preferFresh`, `exploreNew`).
+
+`todayOnly=true` (aliases `onlyToday`, `today`) restricts the ranking to images
+uploaded today (UTC): votes about older uploads stop counting and rotation
+fallbacks only use today's uploads. It is **disabled by default**.
+
+The ranking response reports `"explore": true|false` next to `strategy`.
+
 ### Smart fallback endpoint
 
 `GET /images/smart` is a separate path for clients that just want the best
@@ -280,8 +309,8 @@ All routes are under `/api/v1`. Responses are JSON except image bytes.
 | GET | `/frontend-config` | Server-backed display config, e.g. `{rankingAnonymized, defaultImageVisibility}` |
 | GET | `/images/random?amount=2&author=&exclude=id,id` | Bare array of images. Also accepts the request filters below |
 | GET | `/images/author?author=Ada&amount=&offset=` | `{items, total, author}`; `author` may be empty when `uploadedBy`/`mine` is used |
-| GET | `/images/rank?time=day&amount=10&offset=0` | Ranked winners; also `seconds`, `from`, `to`, `author`, `titleRegex`, `mode`, `strategy=ahp|legacy`, `exclude`, `rotation`, `rotationPercent` |
-| GET | `/images/smart?amount=10&offset=0` | Smart ladder: day → week → month → year ranking, then stable random fallback. Uses the same filters and `strategy` as `/images/rank` |
+| GET | `/images/rank?time=day&amount=10&offset=0` | Ranked winners; also `seconds`, `from`, `to`, `author`, `titleRegex`, `mode`, `strategy=ahp|legacy`, `exclude`, `rotation`, `rotationPercent`, `explore` (default true), `todayOnly` |
+| GET | `/images/smart?amount=10&offset=0` | Smart ladder: day → week → month → year ranking, then stable random fallback. Uses the same filters, `strategy`, `explore` and `todayOnly` as `/images/rank` |
 | GET | `/images/:id?format=webp|png|jpg&w=&h=&quality=&download=true&original=true` | Image bytes; default WebP capped to 1920px long edge / 1080p. `original=true` opts into the pristine upload |
 | GET | `/images/:id/meta` | Image metadata |
 | GET | `/rank/modes` | Available vote modes |

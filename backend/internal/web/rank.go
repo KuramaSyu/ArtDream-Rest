@@ -476,9 +476,18 @@ type rankEntry struct {
 	Rotated bool `json:"rotated,omitempty"`
 	// Random marks an image selected by the smart endpoint's random fallback.
 	Random bool `json:"random,omitempty"`
+	// Explore marks an unrated image that exploration mixed into the ranking
+	// because it is new and has no votes in the requested window.
+	Explore bool `json:"explore,omitempty"`
+	// Boost is the exploration weight applied to the ordering key. It is
+	// omitted for entries that were not reweighted.
+	Boost float64 `json:"boost,omitempty"`
 
 	// deranked is an internal sort key; it is never serialized publicly.
 	deranked bool
+	// orderKey is the effective ordering key (Score times Boost). Zero means
+	// "use Score". It is never serialized publicly.
+	orderKey float64
 }
 
 type rankRotationInfo struct {
@@ -497,15 +506,17 @@ type rankResponse struct {
 	// AHP (default) returns normalized priority weights summing to 1.
 	Strategy string `json:"strategy"`
 	// Source is set by the smart endpoint: day, week, month, year or random.
-	Source     string            `json:"source,omitempty"`
-	From       *string           `json:"from,omitempty"`
-	To         *string           `json:"to,omitempty"`
-	Amount     int               `json:"amount"`
-	Offset     int               `json:"offset"`
-	Total      int               `json:"total"`
-	TotalVotes int               `json:"totalVotes"`
-	Winners    []rankEntry       `json:"winners"`
-	Rotation   *rankRotationInfo `json:"rotation,omitempty"`
+	Source     string  `json:"source,omitempty"`
+	From       *string `json:"from,omitempty"`
+	To         *string `json:"to,omitempty"`
+	Amount     int     `json:"amount"`
+	Offset     int     `json:"offset"`
+	Total      int     `json:"total"`
+	TotalVotes int     `json:"totalVotes"`
+	// Explore reports whether new, under-voted images were weighted.
+	Explore  bool              `json:"explore"`
+	Winners  []rankEntry       `json:"winners"`
+	Rotation *rankRotationInfo `json:"rotation,omitempty"`
 }
 
 // rankStats is the shared aggregation result for public and admin rankings.
@@ -617,6 +628,15 @@ func sortRankStats(stats []*rankStats) {
 	})
 }
 
+// rankOrderKey returns the effective ordering score of an entry. Exploration
+// rewrites orderKey; the public Score stays the pure vote result.
+func rankOrderKey(entry rankEntry) float64 {
+	if entry.orderKey > 0 {
+		return entry.orderKey
+	}
+	return entry.Score
+}
+
 func sortRankEntries(entries []rankEntry) {
 	sort.Slice(entries, func(i, j int) bool {
 		a, b := entries[i], entries[j]
@@ -624,8 +644,9 @@ func sortRankEntries(entries []rankEntry) {
 		if a.deranked != b.deranked {
 			return !a.deranked
 		}
-		if a.Score != b.Score {
-			return a.Score > b.Score
+		ka, kb := rankOrderKey(a), rankOrderKey(b)
+		if ka != kb {
+			return ka > kb
 		}
 		if a.Wins != b.Wins {
 			return a.Wins > b.Wins
@@ -670,6 +691,13 @@ func sortRankEntries(entries []rankEntry) {
 // @Param rotationPercent query int false "Percentage of a page that should change between periods (0-100)"
 // @Param rankRotationPercent query int false "Alias for rotationPercent"
 // @Param changePercent query int false "Alias for rotationPercent"
+// @Param explore query bool false "Weight new and under-voted images (default true)"
+// @Param preferNew query bool false "Alias for explore"
+// @Param exploreNew query bool false "Alias for explore"
+// @Param preferFresh query bool false "Alias for explore"
+// @Param todayOnly query bool false "Only rank images uploaded today (UTC)"
+// @Param onlyToday query bool false "Alias for todayOnly"
+// @Param today query bool false "Alias for todayOnly"
 // @Success 200 {object} rankResponse
 // @Failure 400 {object} apiError
 // @Failure 500 {object} apiError
@@ -712,6 +740,47 @@ func (s *Server) rankImages(c *gin.Context) {
 		badRequest(c, err.Error())
 		return
 	}
+	rotationEnabled, rotationPercent, err := rankRotationSettings(c, cfg)
+	if err != nil {
+		badRequest(c, err.Error())
+		return
+	}
+	exploreEnabled, err := resolveExplore(c)
+	if err != nil {
+		badRequest(c, err.Error())
+		return
+	}
+	todayOnly, err := resolveTodayOnly(c)
+	if err != nil {
+		badRequest(c, err.Error())
+		return
+	}
+	now := time.Now().UTC()
+	var plan *explorePlan
+	if exploreEnabled || todayOnly {
+		plan = &explorePlan{Now: now, Scope: window, Enabled: exploreEnabled}
+		if todayOnly {
+			plan.CreatedFrom = todayStart(now)
+		}
+	}
+
+	// Exploration and rotation both need the filtered library once.
+	var pool []store.Image
+	poolLoaded := false
+	loadPool := func() ([]store.Image, error) {
+		if poolLoaded {
+			return pool, nil
+		}
+		loaded, loadErr := s.rankCandidatePool(ctx, c, req, cfg, policy, modRows, window, exclude, plan.createdFrom())
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		pool, poolLoaded = loaded, true
+		return pool, nil
+	}
+	if plan != nil && exploreEnabled {
+		plan.Load = loadPool
+	}
 
 	baseFilter := store.VoteFilter{
 		Mode:       trimTo(c.Query("mode"), 64),
@@ -719,19 +788,13 @@ func (s *Server) rankImages(c *gin.Context) {
 		TitleRegex: trimTo(c.Query("titleRegex"), 200),
 		Limit:      -1,
 	}
-	allEntries, totalVotes, err := s.rankEntriesForWindow(ctx, rng, baseFilter, policy, modRows, window, exclude, strategy)
+	allEntries, totalVotes, err := s.rankEntriesForWindow(ctx, rng, baseFilter, policy, modRows, window, exclude, strategy, plan)
 	if err != nil {
 		asStoreError(c, err)
 		return
 	}
 	total := len(allEntries)
 	currentPage := sliceRankEntries(allEntries, offset, amount)
-
-	rotationEnabled, rotationPercent, err := rankRotationSettings(c, cfg)
-	if err != nil {
-		badRequest(c, err.Error())
-		return
-	}
 
 	resp := rankResponse{
 		Time:       rng.Label,
@@ -740,6 +803,7 @@ func (s *Server) rankImages(c *gin.Context) {
 		Offset:     offset,
 		Total:      total,
 		TotalVotes: totalVotes,
+		Explore:    exploreEnabled,
 	}
 	if rng.From != nil {
 		resp.From = formatRangeTime(rng.From)
@@ -754,23 +818,12 @@ func (s *Server) rankImages(c *gin.Context) {
 			Percent: rotationPercent,
 		}
 
-		var pool []store.Image
-		poolLoaded := false
-		loadPool := func() error {
-			if poolLoaded {
-				return nil
-			}
-			pool, err = s.rankCandidatePool(ctx, c, req, cfg, policy, modRows, window, exclude)
-			poolLoaded = true
-			return err
-		}
-
 		var baseline map[string]struct{}
 		var previousPage []rankEntry
 		if previousRange, ok := previousRangeWindow(rng); ok {
 			info.PreviousFrom = formatRangeTime(previousRange.From)
 			info.PreviousTo = formatRangeTime(previousRange.To)
-			previousEntries, _, err := s.rankEntriesForWindow(ctx, previousRange, baseFilter, policy, modRows, window, exclude, strategy)
+			previousEntries, _, err := s.rankEntriesForWindow(ctx, previousRange, baseFilter, policy, modRows, window, exclude, strategy, plan)
 			if err != nil {
 				asStoreError(c, err)
 				return
@@ -781,11 +834,12 @@ func (s *Server) rankImages(c *gin.Context) {
 			// Reconstruct the likely previous rotated page so quiet periods do
 			// not keep selecting the same fallback images.
 			if len(previousPage) < amount {
-				if err := loadPool(); err != nil {
+				rotationPool, err := loadPool()
+				if err != nil {
 					serverError(c, err)
 					return
 				}
-				ordered := rotationOrder(pool, previousRange, amount, offset)
+				ordered := rotationOrder(rotationPool, previousRange, amount, offset)
 				for i := range ordered {
 					if len(previousPage) >= amount {
 						break
@@ -802,12 +856,13 @@ func (s *Server) rankImages(c *gin.Context) {
 			baseline = make(map[string]struct{})
 		}
 
-		if err := loadPool(); err != nil {
+		rotationPool, err := loadPool()
+		if err != nil {
 			serverError(c, err)
 			return
 		}
 		currentPage, info.Changed, info.Required = applyRankRotation(
-			currentPage, allEntries, offset, amount, baseline, pool, rng, rotationPercent,
+			currentPage, allEntries, offset, amount, baseline, rotationPool, rng, rotationPercent,
 		)
 		// If the only possible candidates are already in the previous page,
 		// showing the previous page is better than returning nothing at all.
@@ -837,10 +892,10 @@ func (s *Server) rankImages(c *gin.Context) {
 // The filter and visibility policy are reused for the previous period so every
 // endpoint parameter (author, title regex, mode, visibility, uploader, regex
 // lists, excluded ids) applies consistently to both sides of the comparison.
-func (s *Server) rankEntriesForWindow(ctx context.Context, rng rangeWindow, filter store.VoteFilter, policy *store.VisibilityPolicy, modRows []store.ImageModeration, window string, exclude map[string]struct{}, strategy rankingStrategy) ([]rankEntry, int, error) {
+func (s *Server) rankEntriesForWindow(ctx context.Context, rng rangeWindow, filter store.VoteFilter, policy *store.VisibilityPolicy, modRows []store.ImageModeration, window string, exclude map[string]struct{}, strategy rankingStrategy, plan *explorePlan) ([]rankEntry, int, error) {
 	filter.From = rng.From
 	filter.To = rng.To
-	cacheKey := rankingCacheKey(strategy, rng, filter, policy, modRows, window, exclude)
+	cacheKey := rankingCacheKey(strategy, rng, filter, policy, modRows, window, exclude, plan)
 	if entries, totalVotes, ok := s.rankCache.Get(cacheKey); ok {
 		return entries, totalVotes, nil
 	}
@@ -852,14 +907,30 @@ func (s *Server) rankEntriesForWindow(ctx context.Context, rng rangeWindow, filt
 	if err != nil {
 		return nil, 0, err
 	}
+	createdFrom := plan.createdFrom()
 	skip := func(img *store.Image) bool {
 		if policy.Hidden(img) {
 			return true
 		}
 		_, excluded := exclude[img.ID]
-		return excluded
+		if excluded {
+			return true
+		}
+		// todayOnly treats votes about older uploads like votes about hidden
+		// images: the comparison does not count for the requested ranking.
+		return !createdFrom.IsZero() && img.CreatedAt.Before(createdFrom)
 	}
 	stats, totalVotes := strategy.Compute(votes, images, skip)
+
+	// Only a cache miss needs the library: cached rankings already contain
+	// their boosted and injected entries.
+	if plan != nil && plan.Candidates == nil && plan.Load != nil {
+		candidates, err := plan.Load()
+		if err != nil {
+			return nil, 0, err
+		}
+		plan.Candidates = candidates
+	}
 
 	entries := make([]rankEntry, 0, len(stats))
 	for _, st := range stats {
@@ -869,17 +940,20 @@ func (s *Server) rankEntriesForWindow(ctx context.Context, rng rangeWindow, filt
 		}
 		entry := rankEntryFor(st)
 		entry.deranked = hasMod && mod.Deranked
+		applyExploreBoost(&entry, st.image, st.votes, plan)
 		entries = append(entries, entry)
 	}
+	entries = injectExploreEntries(entries, plan)
 	sortRankEntries(entries)
 	s.rankCache.Set(cacheKey, entries, totalVotes)
 	return entries, totalVotes, nil
 }
 
 // rankCandidatePool returns every live image matching the request filters. It
-// is used only when rotation is enabled and supplies zero-vote fallbacks when
-// a period has too few votes to produce a fresh page.
-func (s *Server) rankCandidatePool(ctx context.Context, c *gin.Context, req store.ImageRequest, cfg store.AppConfig, policy *store.VisibilityPolicy, modRows []store.ImageModeration, window string, exclude map[string]struct{}) ([]store.Image, error) {
+// is used for exploration candidates and as rotation fallback when a period has
+// too few votes to produce a fresh page. createdFrom drops uploads before that
+// instant (todayOnly); the zero value keeps every upload.
+func (s *Server) rankCandidatePool(ctx context.Context, c *gin.Context, req store.ImageRequest, cfg store.AppConfig, policy *store.VisibilityPolicy, modRows []store.ImageModeration, window string, exclude map[string]struct{}, createdFrom time.Time) ([]store.Image, error) {
 	visibility := req.Visibility
 	if visibility == "" {
 		visibility = cfg.DefaultImageVisibility
@@ -904,6 +978,9 @@ func (s *Server) rankCandidatePool(ctx context.Context, c *gin.Context, req stor
 			continue
 		}
 		if policy.Hidden(img) {
+			continue
+		}
+		if !createdFrom.IsZero() && img.CreatedAt.Before(createdFrom) {
 			continue
 		}
 		if mod, ok := store.ModerationFor(modRows, img.ID, window); ok && (mod.Hidden || mod.Deranked) {
@@ -1153,6 +1230,13 @@ func formatRangeTime(v *int64) *string {
 // @Param includeTitles query []string false "Title allow-list regexes" collectionFormat(csv)
 // @Param excludeTitles query []string false "Title deny-list regexes" collectionFormat(csv)
 // @Param exclude query []string false "Image IDs to exclude from every ladder step" collectionFormat(csv)
+// @Param explore query bool false "Weight new and under-voted images (default true)"
+// @Param preferNew query bool false "Alias for explore"
+// @Param exploreNew query bool false "Alias for explore"
+// @Param preferFresh query bool false "Alias for explore"
+// @Param todayOnly query bool false "Only rank images uploaded today (UTC)"
+// @Param onlyToday query bool false "Alias for todayOnly"
+// @Param today query bool false "Alias for todayOnly"
 // @Success 200 {object} rankResponse
 // @Failure 400 {object} apiError
 // @Failure 500 {object} apiError
@@ -1189,6 +1273,41 @@ func (s *Server) smartImages(c *gin.Context) {
 		badRequest(c, err.Error())
 		return
 	}
+	exploreEnabled, err := resolveExplore(c)
+	if err != nil {
+		badRequest(c, err.Error())
+		return
+	}
+	todayOnly, err := resolveTodayOnly(c)
+	if err != nil {
+		badRequest(c, err.Error())
+		return
+	}
+	var plan *explorePlan
+	if exploreEnabled || todayOnly {
+		plan = &explorePlan{Now: now, Scope: store.ModerationAll, Enabled: exploreEnabled}
+		if todayOnly {
+			plan.CreatedFrom = todayStart(now)
+		}
+	}
+	var pool []store.Image
+	poolLoaded := false
+	// One conservative pool serves every ladder step and the random fallback:
+	// images hidden or deranked in any window stay out.
+	loadPool := func() ([]store.Image, error) {
+		if poolLoaded {
+			return pool, nil
+		}
+		loaded, loadErr := s.rankCandidatePool(ctx, c, req, cfg, policy, modRows, store.ModerationAll, exclude, plan.createdFrom())
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		pool, poolLoaded = loaded, true
+		return pool, nil
+	}
+	if plan != nil && exploreEnabled {
+		plan.Load = loadPool
+	}
 	baseFilter := store.VoteFilter{
 		Mode:       trimTo(c.Query("mode"), 64),
 		Author:     trimTo(c.Query("author"), 120),
@@ -1199,7 +1318,7 @@ func (s *Server) smartImages(c *gin.Context) {
 	for _, label := range []string{"day", "week", "month", "year"} {
 		rng := rollingRangeForLabel(label, now)
 		window := store.ModerationWindowForLabel(label)
-		entries, totalVotes, err := s.rankEntriesForWindow(ctx, rng, baseFilter, policy, modRows, window, exclude, strategy)
+		entries, totalVotes, err := s.rankEntriesForWindow(ctx, rng, baseFilter, policy, modRows, window, exclude, strategy, plan)
 		if err != nil {
 			asStoreError(c, err)
 			return
@@ -1221,6 +1340,7 @@ func (s *Server) smartImages(c *gin.Context) {
 			Offset:     offset,
 			Total:      len(entries),
 			TotalVotes: totalVotes,
+			Explore:    exploreEnabled,
 			Winners:    page,
 		}
 		c.JSON(http.StatusOK, resp)
@@ -1229,8 +1349,7 @@ func (s *Server) smartImages(c *gin.Context) {
 
 	// No ranking exists even for the whole year: return a stable daily random
 	// page that still honors the same filters, exclusions and pagination.
-	pool, err := s.rankCandidatePool(ctx, c, req, cfg, policy, modRows, store.ModerationAll, exclude)
-	if err != nil {
+	if _, err := loadPool(); err != nil {
 		serverError(c, err)
 		return
 	}
@@ -1245,6 +1364,7 @@ func (s *Server) smartImages(c *gin.Context) {
 		Amount:   amount,
 		Offset:   offset,
 		Total:    len(pool),
+		Explore:  exploreEnabled,
 		Winners:  page,
 	})
 }

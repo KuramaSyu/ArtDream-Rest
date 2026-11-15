@@ -614,7 +614,7 @@ export function RankPage() {
         }}
       >
         <Box>
-          <Box
+          {/* <Box
             sx={{
               fontSize: "0.72rem",
               letterSpacing: "0.22em",
@@ -624,7 +624,7 @@ export function RankPage() {
             }}
           >
             {castCount > 0 ? `${castCount} verdict${castCount === 1 ? "" : "s"} cast` : "a duel of dreams"}
-          </Box>
+          </Box> */}
           <Typography
             className="display"
             sx={{

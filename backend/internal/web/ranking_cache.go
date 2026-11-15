@@ -147,7 +147,7 @@ func (s *Server) invalidateRankingCache() {
 // strategy, window bounds, vote filters, the compiled visibility policy,
 // moderation state and excluded image ids. Length prefixes avoid accidental
 // separator collisions in user-supplied regexes/ids.
-func rankingCacheKey(strategy rankingStrategy, rng rangeWindow, filter store.VoteFilter, policy *store.VisibilityPolicy, modRows []store.ImageModeration, window string, exclude map[string]struct{}) string {
+func rankingCacheKey(strategy rankingStrategy, rng rangeWindow, filter store.VoteFilter, policy *store.VisibilityPolicy, modRows []store.ImageModeration, window string, exclude map[string]struct{}, plan *explorePlan) string {
 	var b strings.Builder
 	write := func(key, value string) {
 		b.WriteString(key)
@@ -177,6 +177,9 @@ func rankingCacheKey(strategy rankingStrategy, rng rangeWindow, filter store.Vot
 	write("image", filter.ImageID)
 	write("policy", policy.Fingerprint())
 	write("window", window)
+	// Exploration changes ordering and may add unrated images; todayOnly also
+	// changes which votes count, so both belong into the key.
+	write("explore", plan.cacheKey())
 
 	excluded := make([]string, 0, len(exclude))
 	for id := range exclude {

@@ -192,6 +192,8 @@ export const api = {
         rotation: query.rotation,
         rotationPercent: query.rotationPercent,
         exclude: query.exclude,
+        explore: query.explore,
+        todayOnly: query.todayOnly,
       },
     }),
 
@@ -213,6 +215,8 @@ export const api = {
         includeTitles: query.includeTitles,
         excludeTitles: query.excludeTitles,
         exclude: query.exclude,
+        explore: query.explore,
+        todayOnly: query.todayOnly,
       },
     }),
 

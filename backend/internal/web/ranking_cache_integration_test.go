@@ -36,7 +36,7 @@ func TestRankEntriesForWindowUsesAndInvalidatesCache(t *testing.T) {
 	rng := rangeWindow{Label: "all"}
 	filter := store.VoteFilter{Limit: -1}
 	compute := func() []rankEntry {
-		entries, _, err := srv.rankEntriesForWindow(ctx, rng, filter, nil, nil, "all", nil, ahpRankingStrategy{})
+		entries, _, err := srv.rankEntriesForWindow(ctx, rng, filter, nil, nil, "all", nil, ahpRankingStrategy{}, nil)
 		if err != nil {
 			t.Fatalf("rank entries: %v", err)
 		}
