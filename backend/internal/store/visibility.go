@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -167,6 +168,62 @@ func (p *VisibilityPolicy) Empty() bool {
 		len(p.reqIncludeAuthors) == 0 && len(p.reqIncludeTitles) == 0 &&
 		(p.visibility == "" || p.visibility == VisibilityAll) &&
 		p.service == "" && len(p.uploadedBy) == 0
+}
+
+// Fingerprint returns a stable, length-prefixed representation of the policy
+// inputs. It is used for ranking cache keys: two policies with the same
+// visibility, service, uploader set and pattern lists produce the same string.
+func (p *VisibilityPolicy) Fingerprint() string {
+	if p == nil {
+		return ""
+	}
+	var b strings.Builder
+	appendList := func(key string, list []*regexp.Regexp) {
+		b.WriteString(key)
+		b.WriteByte(':')
+		b.WriteString(strconv.Itoa(len(list)))
+		b.WriteByte(':')
+		for _, re := range list {
+			pattern := re.String()
+			b.WriteString(strconv.Itoa(len(pattern)))
+			b.WriteByte(':')
+			b.WriteString(pattern)
+			b.WriteByte('|')
+		}
+		b.WriteByte(';')
+	}
+	appendList("ea", p.excludeAuthors)
+	appendList("et", p.excludeTitles)
+	appendList("ia", p.includeAuthors)
+	appendList("it", p.includeTitles)
+	appendList("rea", p.reqExcludeAuthors)
+	appendList("ret", p.reqExcludeTitles)
+	appendList("ria", p.reqIncludeAuthors)
+	appendList("rit", p.reqIncludeTitles)
+	b.WriteString("v:")
+	b.WriteString(strconv.Itoa(len(p.visibility)))
+	b.WriteByte(':')
+	b.WriteString(p.visibility)
+	b.WriteByte(';')
+	b.WriteString("s:")
+	b.WriteString(strconv.Itoa(len(p.service)))
+	b.WriteByte(':')
+	b.WriteString(p.service)
+	b.WriteByte(';')
+	if len(p.uploadedBy) > 0 {
+		ids := make([]int64, 0, len(p.uploadedBy))
+		for id := range p.uploadedBy {
+			ids = append(ids, id)
+		}
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+		b.WriteString("u:")
+		for _, id := range ids {
+			b.WriteString(strconv.FormatInt(id, 10))
+			b.WriteByte(',')
+		}
+		b.WriteByte(';')
+	}
+	return b.String()
 }
 
 // Hidden reports whether an image is excluded by the configured rules.

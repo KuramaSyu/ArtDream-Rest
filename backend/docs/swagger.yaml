@@ -314,6 +314,9 @@ definitions:
         type: integer
       offset:
         type: integer
+      strategy:
+        description: Strategy is the aggregation strategy that produced the scores.
+        type: string
       time:
         type: string
       to:
@@ -531,6 +534,11 @@ definitions:
       source:
         description: 'Source is set by the smart endpoint: day, week, month, year
           or random.'
+        type: string
+      strategy:
+        description: |-
+          Strategy is the aggregation strategy that produced the scores.
+          AHP (default) returns normalized priority weights summing to 1.
         type: string
       time:
         type: string
@@ -1038,7 +1046,8 @@ paths:
   /admin/rank:
     get:
       description: Returns exact per-image numbers for any period, including hidden
-        and deranked images flagged in the response.
+        and deranked images flagged in the response. The default AHP strategy returns
+        normalized priority weights (score, sum 1).
       parameters:
       - description: Time window
         enum:
@@ -1071,6 +1080,17 @@ paths:
         in: query
         name: offset
         type: integer
+      - description: Ranking strategy (default ahp)
+        enum:
+        - ahp
+        - legacy
+        in: query
+        name: strategy
+        type: string
+      - description: Alias for strategy
+        in: query
+        name: rankingStrategy
+        type: string
       - description: Vote mode name filter
         in: query
         name: mode
@@ -2136,6 +2156,17 @@ paths:
         in: query
         name: offset
         type: integer
+      - description: Ranking strategy (default ahp)
+        enum:
+        - ahp
+        - legacy
+        in: query
+        name: strategy
+        type: string
+      - description: Alias for strategy
+        in: query
+        name: rankingStrategy
+        type: string
       - description: Vote mode name filter
         in: query
         name: mode
@@ -2248,7 +2279,8 @@ paths:
     get:
       description: 'Returns the strongest available ranking for the same filters:
         day, then week, month, year, and finally random images when no ranking exists
-        at the requested offset.'
+        at the requested offset. The default AHP strategy returns normalized priority
+        weights (score, sum 1).'
       parameters:
       - description: Page size (default 10, max 100)
         in: query
@@ -2258,6 +2290,17 @@ paths:
         in: query
         name: offset
         type: integer
+      - description: Ranking strategy (default ahp)
+        enum:
+        - ahp
+        - legacy
+        in: query
+        name: strategy
+        type: string
+      - description: Alias for strategy
+        in: query
+        name: rankingStrategy
+        type: string
       - description: Vote mode name filter
         in: query
         name: mode
@@ -2343,8 +2386,6 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/web.apiError'
-      security:
-      - BearerAuth: []
       summary: Smart image feed with ranking fallback
       tags:
       - rank

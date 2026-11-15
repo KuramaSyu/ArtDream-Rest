@@ -40,7 +40,9 @@ type adminRankEntry struct {
 }
 
 type adminRankResponse struct {
-	Time          string           `json:"time"`
+	Time string `json:"time"`
+	// Strategy is the aggregation strategy that produced the scores.
+	Strategy      string           `json:"strategy"`
 	Window        string           `json:"window"`
 	From          *string          `json:"from,omitempty"`
 	To            *string          `json:"to,omitempty"`
@@ -59,7 +61,7 @@ type adminRankResponse struct {
 // ranking, hidden images are included (flagged) unless includeHidden=false.
 // adminRankImages godoc
 // @Summary Get the admin ranking
-// @Description Returns exact per-image numbers for any period, including hidden and deranked images flagged in the response.
+// @Description Returns exact per-image numbers for any period, including hidden and deranked images flagged in the response. The default AHP strategy returns normalized priority weights (score, sum 1).
 // @Tags admin
 // @Security BearerAuth
 // @Produce json
@@ -69,6 +71,8 @@ type adminRankResponse struct {
 // @Param to query string false "Custom range end (RFC3339 or unix seconds)"
 // @Param amount query int false "Page size (default 100, max 500)"
 // @Param offset query int false "Pagination offset"
+// @Param strategy query string false "Ranking strategy (default ahp)" Enums(ahp, legacy)
+// @Param rankingStrategy query string false "Alias for strategy"
 // @Param mode query string false "Vote mode name filter"
 // @Param author query string false "Author substring filter"
 // @Param titleRegex query string false "Title regex filter"
@@ -100,6 +104,11 @@ func (s *Server) adminRankImages(c *gin.Context) {
 		return
 	}
 	window := store.ModerationWindowForLabel(rng.Label)
+	strategy, err := resolveRankingStrategy(c)
+	if err != nil {
+		badRequest(c, err.Error())
+		return
+	}
 
 	votes, _, err := s.Store.ListVotes(ctx, store.VoteFilter{
 		From:  rng.From,
@@ -117,7 +126,7 @@ func (s *Server) adminRankImages(c *gin.Context) {
 		return
 	}
 
-	stats, totalVotes := computeRankStats(votes, images, nil)
+	stats, totalVotes := strategy.Compute(votes, images, nil)
 
 	// Optional view filters (do not change moderation state).
 	author := strings.ToLower(trimTo(c.Query("author"), 120))
@@ -242,6 +251,7 @@ func (s *Server) adminRankImages(c *gin.Context) {
 
 	resp := adminRankResponse{
 		Time:          rng.Label,
+		Strategy:      strategy.Name(),
 		Window:        window,
 		Amount:        amount,
 		Offset:        offset,

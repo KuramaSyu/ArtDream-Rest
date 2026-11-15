@@ -60,31 +60,53 @@ func (s *Store) GetImage(ctx context.Context, id string) (*Image, error) {
 		`SELECT `+imageColumns+` FROM images WHERE id = ? AND deleted_at IS NULL`, id))
 }
 
-// GetImagesByIDs loads live images in one query. Missing ids are omitted.
+// GetImagesByIDs loads live images in batches. Missing ids are omitted. The
+// input is de-duplicated and split into chunks so large vote/ranking windows
+// stay below SQLite's SQL-variable limit.
 func (s *Store) GetImagesByIDs(ctx context.Context, ids []string) (map[string]*Image, error) {
+	return s.loadImagesByIDs(ctx, ids, false)
+}
+
+func (s *Store) loadImagesByIDs(ctx context.Context, ids []string, includeDeleted bool) (map[string]*Image, error) {
+	ids = compactUnique(ids)
 	out := make(map[string]*Image, len(ids))
 	if len(ids) == 0 {
 		return out, nil
 	}
-	placeholders := placeholders(len(ids))
-	args := make([]any, 0, len(ids))
-	for _, id := range ids {
-		args = append(args, id)
+	for start := 0; start < len(ids); start += imageIDQueryBatchSize {
+		end := start + imageIDQueryBatchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		if err := s.loadImageBatch(ctx, ids[start:end], includeDeleted, out); err != nil {
+			return nil, err
+		}
 	}
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+imageColumns+` FROM images WHERE deleted_at IS NULL AND id IN (`+placeholders+`)`, args...)
+	return out, nil
+}
+
+func (s *Store) loadImageBatch(ctx context.Context, ids []string, includeDeleted bool, out map[string]*Image) error {
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	query := `SELECT ` + imageColumns + ` FROM images WHERE id IN (` + placeholders(len(ids)) + `)`
+	if !includeDeleted {
+		query = `SELECT ` + imageColumns + ` FROM images WHERE deleted_at IS NULL AND id IN (` + placeholders(len(ids)) + `)`
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		img, err := scanImage(rows)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		out[img.ID] = img
 	}
-	return out, rows.Err()
+	return rows.Err()
 }
 
 // ImagesByAuthor lists an author's images, newest first. Images hidden by the
@@ -355,6 +377,8 @@ func clampLimit(v, fallback int) int {
 	}
 	return v
 }
+
+const imageIDQueryBatchSize = 500
 
 func clampAmount(v, maxV int) int {
 	if v <= 0 {

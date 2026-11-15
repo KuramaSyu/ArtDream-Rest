@@ -526,6 +526,7 @@ func (s *Server) deleteUser(c *gin.Context) {
 		serverError(c, err)
 		return
 	}
+	s.invalidateRankingCache()
 	c.JSON(http.StatusOK, gin.H{"deleted": id})
 }
 

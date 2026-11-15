@@ -741,21 +741,19 @@ export function RankPage() {
                   return (
                     <motion.div
                       key={item.id}
-                      animate={isPicked ? { scale: 1.018 } : { scale: 1 }}
-                      transition={{ type: "spring", stiffness: 260, damping: 22 }}
+                      animate={
+                        isPicked
+                          ? { rotate: side === "left" ? -1.2 : 1.2 }
+                          : { rotate: 0 }
+                      }
+                      transition={{ type: "spring", stiffness: 240, damping: 20 }}
                       style={{ position: "relative" }}
                     >
                       <Box
                         className="image-frame rank-image-card"
                         sx={{
                           height: { xs: "clamp(240px, 38vh, 380px)", md: "clamp(340px, 50vh, 560px)" },
-                          border: isPicked
-                            ? `2px solid ${theme.palette.primary.main}`
-                            : "2px solid rgba(255,255,255,.12)",
-                          transition: "border-color 220ms ease, box-shadow 220ms ease",
-                          boxShadow: isPicked
-                            ? `0 30px 90px ${alpha(theme.palette.primary.main, 0.35)}`
-                            : undefined,
+                          border: "2px solid rgba(255,255,255,.12)",
                         }}
                       >
                         <img

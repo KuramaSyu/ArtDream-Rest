@@ -141,8 +141,24 @@ Outcome derivation:
   midpoint are recorded as a draw. Otherwise the winner gets
   `weight = |value - mid| / ((max - min) / 2)` (0…1), so a hesitant vote counts
   less than a decisive one.
-- Rank aggregation sums the winner's weight; draws add 0.5 to both sides.
-  Entries are ordered by score, wins, win rate, then votes.
+- Rank aggregation is pluggable via a strategy interface. `ahp` (the default)
+  builds a pairwise comparison matrix from the vote stream and derives the AHP
+  priority vector with the geometric-mean method. Each winner/loser judgment
+  maps its normalized weight (0…1) onto the Saaty 1–9 scale (`1 + 8*weight`),
+  repeated judgments about the same pair are aggregated geometrically, and
+  pairs without a direct vote count as neutral (1). The resulting `score` is a
+  normalized priority weight: all ranked images sum to 1. `legacy` keeps the
+  original additive aggregation (winner weight + 0.5 per draw).
+- Select the strategy with `?strategy=ahp|legacy` (alias `rankingStrategy`).
+  The public ranking, `/images/smart` and the admin ranking all use AHP unless
+  `legacy` is requested. Responses include `strategy` and per-entry `score`.
+- In legacy mode, aggregation sums the winner's weight; draws add 0.5 to both
+  sides. Entries are ordered by score, wins, win rate, then votes.
+
+Ranking results are cached in-process for 30 seconds per strategy, window,
+filter set, visibility policy and moderation state. Vote and image mutations
+invalidate the cache. Vote image ids are de-duplicated and loaded in batches of
+500, which keeps large ranking windows below SQLite's SQL-variable limit.
 
 Time ranges use rolling windows: `day` = 24h, `week` = 7d, `month` = 30d,
 `year` = 365d. `custom` accepts `seconds=N`, or `from`/`to` as RFC3339 or unix
@@ -254,8 +270,8 @@ All routes are under `/api/v1`. Responses are JSON except image bytes.
 | GET | `/frontend-config` | Server-backed display config, e.g. `{rankingAnonymized, defaultImageVisibility}` |
 | GET | `/images/random?amount=2&author=&exclude=id,id` | Bare array of images. Also accepts the request filters below |
 | GET | `/images/author?author=Ada&amount=&offset=` | `{items, total, author}`; `author` may be empty when `uploadedBy`/`mine` is used |
-| GET | `/images/rank?time=day&amount=10&offset=0` | Ranked winners; also `seconds`, `from`, `to`, `author`, `titleRegex`, `mode`, `exclude`, `rotation`, `rotationPercent` |
-| GET | `/images/smart?amount=10&offset=0` | Smart ladder: day → week → month → year ranking, then stable random fallback. Uses the same filters as `/images/rank` |
+| GET | `/images/rank?time=day&amount=10&offset=0` | Ranked winners; also `seconds`, `from`, `to`, `author`, `titleRegex`, `mode`, `strategy=ahp|legacy`, `exclude`, `rotation`, `rotationPercent` |
+| GET | `/images/smart?amount=10&offset=0` | Smart ladder: day → week → month → year ranking, then stable random fallback. Uses the same filters and `strategy` as `/images/rank` |
 | GET | `/images/:id?format=webp|png|jpg&w=&h=&quality=&download=true&original=true` | Image bytes; default WebP capped to 1920px long edge / 1080p. `original=true` opts into the pristine upload |
 | GET | `/images/:id/meta` | Image metadata |
 | GET | `/rank/modes` | Available vote modes |
@@ -344,7 +360,7 @@ Vote request (flexible key spellings are accepted — `leftImageId`, `left-img`,
 | PATCH | `/admin/votes/:id` | Change mode/winner/value/min/max/metadata |
 | DELETE | `/admin/votes/:id` | Delete one vote |
 | DELETE | `/admin/votes` | Delete every vote matching the same filters (`ids=1,2` also supported) |
-| GET | `/admin/rank` | Exact numbers with moderation state; filters `time`, `seconds`, `author`, `titleRegex`, `mode`, `includeHidden`, `amount`, `offset` |
+| GET | `/admin/rank` | Exact numbers with moderation state; filters `time`, `seconds`, `author`, `titleRegex`, `mode`, `strategy`, `includeHidden`, `amount`, `offset` |
 | GET | `/admin/rank/filters` | Read the four visibility regex lists |
 | PATCH | `/admin/rank/filters` | Replace any of `excludeAuthors`, `excludeTitles`, `includeAuthors`, `includeTitles` (validated regex arrays) |
 | PATCH | `/admin/images/:id/moderation` | Upsert hide/derank: `{timeWindow, hidden?, deranked?, note?}` |

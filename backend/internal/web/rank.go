@@ -264,6 +264,7 @@ func (s *Server) castVote(c *gin.Context) {
 		serverError(c, err)
 		return
 	}
+	s.invalidateRankingCache()
 	c.JSON(http.StatusCreated, voteToDTO(v, images))
 }
 
@@ -391,6 +392,9 @@ type rankRotationInfo struct {
 
 type rankResponse struct {
 	Time string `json:"time"`
+	// Strategy is the aggregation strategy that produced the scores.
+	// AHP (default) returns normalized priority weights summing to 1.
+	Strategy string `json:"strategy"`
 	// Source is set by the smart endpoint: day, week, month, year or random.
 	Source     string            `json:"source,omitempty"`
 	From       *string           `json:"from,omitempty"`
@@ -485,7 +489,7 @@ func rankEntryFor(st *rankStats) rankEntry {
 		Losses:        st.losses,
 		Ties:          st.ties,
 		Votes:         st.votes,
-		Score:         math.Round(st.score*1000) / 1000,
+		Score:         math.Round(st.score*1e6) / 1e6,
 		WinRate:       math.Round(rate*1000) / 1000,
 		WinPercentage: math.Round(rate*1000) / 10,
 		Image:         dto,
@@ -546,6 +550,8 @@ func sortRankEntries(entries []rankEntry) {
 // @Param to query string false "Custom range end (RFC3339 or unix seconds)"
 // @Param amount query int false "Page size (default 10, max 100)"
 // @Param offset query int false "Pagination offset"
+// @Param strategy query string false "Ranking strategy (default ahp)" Enums(ahp, legacy)
+// @Param rankingStrategy query string false "Alias for strategy"
 // @Param mode query string false "Vote mode name filter"
 // @Param author query string false "Author filter"
 // @Param titleRegex query string false "Title regex filter"
@@ -600,6 +606,11 @@ func (s *Server) rankImages(c *gin.Context) {
 	}
 	window := store.ModerationWindowForLabel(rng.Label)
 	exclude := excludeIDSet(c)
+	strategy, err := resolveRankingStrategy(c)
+	if err != nil {
+		badRequest(c, err.Error())
+		return
+	}
 
 	baseFilter := store.VoteFilter{
 		Mode:       trimTo(c.Query("mode"), 64),
@@ -607,7 +618,7 @@ func (s *Server) rankImages(c *gin.Context) {
 		TitleRegex: trimTo(c.Query("titleRegex"), 200),
 		Limit:      -1,
 	}
-	allEntries, totalVotes, err := s.rankEntriesForWindow(ctx, rng, baseFilter, policy, modRows, window, exclude)
+	allEntries, totalVotes, err := s.rankEntriesForWindow(ctx, rng, baseFilter, policy, modRows, window, exclude, strategy)
 	if err != nil {
 		asStoreError(c, err)
 		return
@@ -623,6 +634,7 @@ func (s *Server) rankImages(c *gin.Context) {
 
 	resp := rankResponse{
 		Time:       rng.Label,
+		Strategy:   strategy.Name(),
 		Amount:     amount,
 		Offset:     offset,
 		Total:      total,
@@ -657,7 +669,7 @@ func (s *Server) rankImages(c *gin.Context) {
 		if previousRange, ok := previousRangeWindow(rng); ok {
 			info.PreviousFrom = formatRangeTime(previousRange.From)
 			info.PreviousTo = formatRangeTime(previousRange.To)
-			previousEntries, _, err := s.rankEntriesForWindow(ctx, previousRange, baseFilter, policy, modRows, window, exclude)
+			previousEntries, _, err := s.rankEntriesForWindow(ctx, previousRange, baseFilter, policy, modRows, window, exclude, strategy)
 			if err != nil {
 				asStoreError(c, err)
 				return
@@ -724,9 +736,13 @@ func (s *Server) rankImages(c *gin.Context) {
 // The filter and visibility policy are reused for the previous period so every
 // endpoint parameter (author, title regex, mode, visibility, uploader, regex
 // lists, excluded ids) applies consistently to both sides of the comparison.
-func (s *Server) rankEntriesForWindow(ctx context.Context, rng rangeWindow, filter store.VoteFilter, policy *store.VisibilityPolicy, modRows []store.ImageModeration, window string, exclude map[string]struct{}) ([]rankEntry, int, error) {
+func (s *Server) rankEntriesForWindow(ctx context.Context, rng rangeWindow, filter store.VoteFilter, policy *store.VisibilityPolicy, modRows []store.ImageModeration, window string, exclude map[string]struct{}, strategy rankingStrategy) ([]rankEntry, int, error) {
 	filter.From = rng.From
 	filter.To = rng.To
+	cacheKey := rankingCacheKey(strategy, rng, filter, policy, modRows, window, exclude)
+	if entries, totalVotes, ok := s.rankCache.Get(cacheKey); ok {
+		return entries, totalVotes, nil
+	}
 	votes, _, err := s.Store.ListVotes(ctx, filter)
 	if err != nil {
 		return nil, 0, err
@@ -735,13 +751,17 @@ func (s *Server) rankEntriesForWindow(ctx context.Context, rng rangeWindow, filt
 	if err != nil {
 		return nil, 0, err
 	}
-	stats, totalVotes := computeRankStats(votes, images, policy.Hidden)
+	skip := func(img *store.Image) bool {
+		if policy.Hidden(img) {
+			return true
+		}
+		_, excluded := exclude[img.ID]
+		return excluded
+	}
+	stats, totalVotes := strategy.Compute(votes, images, skip)
 
 	entries := make([]rankEntry, 0, len(stats))
 	for _, st := range stats {
-		if _, skipped := exclude[st.image.ID]; skipped {
-			continue
-		}
 		mod, hasMod := store.ModerationFor(modRows, st.image.ID, window)
 		if hasMod && mod.Hidden {
 			continue
@@ -751,6 +771,7 @@ func (s *Server) rankEntriesForWindow(ctx context.Context, rng rangeWindow, filt
 		entries = append(entries, entry)
 	}
 	sortRankEntries(entries)
+	s.rankCache.Set(cacheKey, entries, totalVotes)
 	return entries, totalVotes, nil
 }
 
@@ -1012,11 +1033,13 @@ func formatRangeTime(v *int64) *string {
 
 // smartImages godoc
 // @Summary Smart image feed with ranking fallback
-// @Description Returns the strongest available ranking for the same filters: day, then week, month, year, and finally random images when no ranking exists at the requested offset.
+// @Description Returns the strongest available ranking for the same filters: day, then week, month, year, and finally random images when no ranking exists at the requested offset. The default AHP strategy returns normalized priority weights (score, sum 1).
 // @Tags rank
 // @Produce json
 // @Param amount query int false "Page size (default 10, max 100)"
 // @Param offset query int false "Pagination offset"
+// @Param strategy query string false "Ranking strategy (default ahp)" Enums(ahp, legacy)
+// @Param rankingStrategy query string false "Alias for strategy"
 // @Param mode query string false "Vote mode name filter"
 // @Param author query string false "Author filter"
 // @Param titleRegex query string false "Title regex filter"
@@ -1032,7 +1055,6 @@ func formatRangeTime(v *int64) *string {
 // @Success 200 {object} rankResponse
 // @Failure 400 {object} apiError
 // @Failure 500 {object} apiError
-// @Security BearerAuth
 // @Router /images/smart [get]
 func (s *Server) smartImages(c *gin.Context) {
 	amount := parseAmount(c, 10, 100)
@@ -1061,6 +1083,11 @@ func (s *Server) smartImages(c *gin.Context) {
 		return
 	}
 	exclude := excludeIDSet(c)
+	strategy, err := resolveRankingStrategy(c)
+	if err != nil {
+		badRequest(c, err.Error())
+		return
+	}
 	baseFilter := store.VoteFilter{
 		Mode:       trimTo(c.Query("mode"), 64),
 		Author:     trimTo(c.Query("author"), 120),
@@ -1071,7 +1098,7 @@ func (s *Server) smartImages(c *gin.Context) {
 	for _, label := range []string{"day", "week", "month", "year"} {
 		rng := rollingRangeForLabel(label, now)
 		window := store.ModerationWindowForLabel(label)
-		entries, totalVotes, err := s.rankEntriesForWindow(ctx, rng, baseFilter, policy, modRows, window, exclude)
+		entries, totalVotes, err := s.rankEntriesForWindow(ctx, rng, baseFilter, policy, modRows, window, exclude, strategy)
 		if err != nil {
 			asStoreError(c, err)
 			return
@@ -1085,6 +1112,7 @@ func (s *Server) smartImages(c *gin.Context) {
 		}
 		resp := rankResponse{
 			Time:       label,
+			Strategy:   strategy.Name(),
 			Source:     label,
 			From:       formatRangeTime(rng.From),
 			To:         formatRangeTime(rng.To),
@@ -1110,12 +1138,13 @@ func (s *Server) smartImages(c *gin.Context) {
 		page[i].Rank = offset + i + 1
 	}
 	c.JSON(http.StatusOK, rankResponse{
-		Time:    "random",
-		Source:  "random",
-		Amount:  amount,
-		Offset:  offset,
-		Total:   len(pool),
-		Winners: page,
+		Time:     "random",
+		Strategy: strategy.Name(),
+		Source:   "random",
+		Amount:   amount,
+		Offset:   offset,
+		Total:    len(pool),
+		Winners:  page,
 	})
 }
 

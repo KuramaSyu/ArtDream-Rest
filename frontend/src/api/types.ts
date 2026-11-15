@@ -83,6 +83,8 @@ export interface Vote {
   createdAt: string;
 }
 
+export type RankStrategy = "ahp" | "legacy";
+
 export interface RankEntry {
   rank: number;
   id: string;
@@ -96,6 +98,10 @@ export interface RankEntry {
   ties: number;
   votes: number;
   score: number;
+  /**
+   * Aggregation strategy used for this ranking. AHP scores are normalized
+   * priority weights (all ranked images sum to 1); legacy scores are additive.
+   */
   winRate: number;
   /** Win rate expressed as a 0–100 percentage, rounded to one decimal. */
   winPercentage?: number;
@@ -120,6 +126,7 @@ export interface AdminRankEntry extends RankEntry {
 
 export interface AdminRankResponse {
   time: string;
+  strategy: RankStrategy;
   window: ModerationWindow;
   from?: string;
   to?: string;
@@ -167,6 +174,7 @@ export type RankSource = "day" | "week" | "month" | "year" | "random";
 
 export interface RankResponse {
   time: string;
+  strategy: RankStrategy;
   /** Set by the smart endpoint to the ladder step that produced the page. */
   source?: RankSource;
   from?: string;
@@ -211,6 +219,8 @@ export interface RankQuery extends ImageRequestFilters {
   author?: string;
   titleRegex?: string;
   mode?: string;
+  /** Ranking aggregation strategy. Defaults to AHP. */
+  strategy?: RankStrategy;
   /** Per-request override of the admin rank-rotation switch. */
   rotation?: boolean;
   /** Per-request override of the minimum changed share (0-100). */
@@ -250,6 +260,7 @@ export interface AdminFilter extends ImageRequestFilters {
   author?: string;
   titleRegex?: string;
   mode?: string;
+  strategy?: RankStrategy;
   imageId?: string;
   amount?: number;
   offset?: number;

@@ -28,6 +28,7 @@ type Server struct {
 	SessionTTL     time.Duration
 	AllowedOrigins []string
 
+	rankCache   *rankingCache
 	bootstrapMu sync.Mutex
 }
 
@@ -42,6 +43,7 @@ func NewServer(st *store.Store, renderer *imageproc.Renderer, dataDir, uploadDir
 		MaxUploadBytes: 30 << 20, // 30 MiB
 		SessionTTL:     30 * 24 * time.Hour,
 		AllowedOrigins: origins,
+		rankCache:      newRankingCache(),
 	}
 }
 

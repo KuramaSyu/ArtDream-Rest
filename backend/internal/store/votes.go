@@ -293,29 +293,7 @@ func (s *Store) ListVotes(ctx context.Context, f VoteFilter) ([]Vote, int, error
 
 // getAllImagesByIDs intentionally includes soft-deleted rows for filtering.
 func (s *Store) getAllImagesByIDs(ctx context.Context, ids []string) (map[string]*Image, error) {
-	out := make(map[string]*Image, len(ids))
-	ids = compactUnique(ids)
-	if len(ids) == 0 {
-		return out, nil
-	}
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		args[i] = id
-	}
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+imageColumns+` FROM images WHERE id IN (`+placeholders(len(ids))+`)`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		img, err := scanImage(rows)
-		if err != nil {
-			return nil, err
-		}
-		out[img.ID] = img
-	}
-	return out, rows.Err()
+	return s.loadImagesByIDs(ctx, ids, true)
 }
 
 func (s *Store) queryVotes(ctx context.Context, query string, args []any) ([]Vote, error) {

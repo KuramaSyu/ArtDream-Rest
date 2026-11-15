@@ -205,6 +205,7 @@ func (s *Server) updateVoteAdmin(c *gin.Context) {
 		serverError(c, err)
 		return
 	}
+	s.invalidateRankingCache()
 	c.JSON(http.StatusOK, voteToDTO(v, images))
 }
 
@@ -230,6 +231,7 @@ func (s *Server) deleteVoteAdmin(c *gin.Context) {
 		asStoreError(c, err)
 		return
 	}
+	s.invalidateRankingCache()
 	c.JSON(http.StatusOK, gin.H{"deleted": id})
 }
 
@@ -279,6 +281,7 @@ func (s *Server) bulkDeleteVotesAdmin(c *gin.Context) {
 			serverError(c, err)
 			return
 		}
+		s.invalidateRankingCache()
 		c.JSON(http.StatusOK, gin.H{"deleted": n})
 		return
 	}
@@ -299,6 +302,7 @@ func (s *Server) bulkDeleteVotesAdmin(c *gin.Context) {
 		serverError(c, err)
 		return
 	}
+	s.invalidateRankingCache()
 	c.JSON(http.StatusOK, gin.H{"deleted": n})
 }
 

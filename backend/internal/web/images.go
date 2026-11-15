@@ -602,6 +602,7 @@ func (s *Server) updateImageAdmin(c *gin.Context) {
 		serverError(c, err)
 		return
 	}
+	s.invalidateRankingCache()
 	img, err := s.Store.GetImage(c.Request.Context(), id)
 	if err != nil {
 		asStoreError(c, err)
@@ -718,6 +719,7 @@ func (s *Server) deleteImage(ctx context.Context, id string, deleteVotes bool) e
 	_ = s.Store.DeleteModerationForImage(ctx, id)
 	_ = os.Remove(img.StoragePath)
 	_ = s.Renderer.RemoveForImage(id)
+	s.invalidateRankingCache()
 	return nil
 }
 

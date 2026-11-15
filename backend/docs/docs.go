@@ -623,7 +623,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Returns exact per-image numbers for any period, including hidden and deranked images flagged in the response.",
+                "description": "Returns exact per-image numbers for any period, including hidden and deranked images flagged in the response. The default AHP strategy returns normalized priority weights (score, sum 1).",
                 "produces": [
                     "application/json"
                 ],
@@ -674,6 +674,22 @@ const docTemplate = `{
                         "type": "integer",
                         "description": "Pagination offset",
                         "name": "offset",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "ahp",
+                            "legacy"
+                        ],
+                        "type": "string",
+                        "description": "Ranking strategy (default ahp)",
+                        "name": "strategy",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Alias for strategy",
+                        "name": "rankingStrategy",
                         "in": "query"
                     },
                     {
@@ -2142,6 +2158,22 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "enum": [
+                            "ahp",
+                            "legacy"
+                        ],
+                        "type": "string",
+                        "description": "Ranking strategy (default ahp)",
+                        "name": "strategy",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Alias for strategy",
+                        "name": "rankingStrategy",
+                        "in": "query"
+                    },
+                    {
                         "type": "string",
                         "description": "Vote mode name filter",
                         "name": "mode",
@@ -2297,12 +2329,7 @@ const docTemplate = `{
         },
         "/images/smart": {
             "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Returns the strongest available ranking for the same filters: day, then week, month, year, and finally random images when no ranking exists at the requested offset.",
+                "description": "Returns the strongest available ranking for the same filters: day, then week, month, year, and finally random images when no ranking exists at the requested offset. The default AHP strategy returns normalized priority weights (score, sum 1).",
                 "produces": [
                     "application/json"
                 ],
@@ -2321,6 +2348,22 @@ const docTemplate = `{
                         "type": "integer",
                         "description": "Pagination offset",
                         "name": "offset",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "ahp",
+                            "legacy"
+                        ],
+                        "type": "string",
+                        "description": "Ranking strategy (default ahp)",
+                        "name": "strategy",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Alias for strategy",
+                        "name": "rankingStrategy",
                         "in": "query"
                     },
                     {
@@ -3473,6 +3516,10 @@ const docTemplate = `{
                 "offset": {
                     "type": "integer"
                 },
+                "strategy": {
+                    "description": "Strategy is the aggregation strategy that produced the scores.",
+                    "type": "string"
+                },
                 "time": {
                     "type": "string"
                 },
@@ -3800,6 +3847,10 @@ const docTemplate = `{
                 },
                 "source": {
                     "description": "Source is set by the smart endpoint: day, week, month, year or random.",
+                    "type": "string"
+                },
+                "strategy": {
+                    "description": "Strategy is the aggregation strategy that produced the scores.\nAHP (default) returns normalized priority weights summing to 1.",
                     "type": "string"
                 },
                 "time": {
