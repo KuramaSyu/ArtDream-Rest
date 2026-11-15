@@ -468,8 +468,7 @@ export function SubmitPage() {
         title="Send dreams into the ring."
         description={
           <>
-            Landscape images only for now. Pick one artist name for the batch; every image can
-            still carry its own optional title.
+            Landscape images only for now
           </>
         }
         action={
@@ -818,8 +817,7 @@ export function SubmitPage() {
             The little card
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2.4 }}>
-            One artist name for every image in this batch. Titles are optional and can be set on
-            the previews.
+            Artist name of the images and an optional title.
           </Typography>
 
           <Box
@@ -841,7 +839,7 @@ export function SubmitPage() {
               size="small"
               helperText={
                 user
-                  ? `Prefilled from your account, but you can show any name. Account id ${user.id} is stored separately.`
+                  ? `Prefilled from your account, change it if you want`
                   : "Shown publicly with every image. Saved locally until you create an account."
               }
               inputProps={{ maxLength: 120 }}
