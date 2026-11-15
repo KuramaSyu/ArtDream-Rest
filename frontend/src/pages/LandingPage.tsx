@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   Alert,
   Box,
@@ -14,6 +14,8 @@ import {
 } from "@mui/material";
 import {
   ArrowForwardRounded,
+  ChevronLeftRounded,
+  ChevronRightRounded,
   CloudUploadOutlined,
   HighQualityRounded,
   LoginRounded,
@@ -32,6 +34,8 @@ import { useToast } from "../components/Feedback";
 import { useStageImages } from "../theme/ThemeHost";
 import { periodLabel } from "../utils/format";
 import { useFrontendConfig } from "../config/FrontendConfig";
+
+const SLIDE_INTERVAL_MS = 6500;
 
 type HomeQuality = "720" | "1080" | "1440" | "original";
 const HOME_QUALITY_KEY = "artdream.homeQuality";
@@ -99,11 +103,42 @@ export function LandingPage() {
 
   useEffect(() => {
     if (slides.length < 2) return;
-    const timer = window.setInterval(() => {
+    const timer = window.setTimeout(() => {
       setIndex((previous) => (previous + 1) % slides.length);
-    }, 6500);
-    return () => window.clearInterval(timer);
-  }, [slides.length]);
+    }, SLIDE_INTERVAL_MS);
+    return () => window.clearTimeout(timer);
+  }, [index, slides]);
+
+  const goToSlide = useCallback(
+    (delta: number) => {
+      if (slides.length < 2) return;
+      setIndex((previous) => (previous + delta + slides.length) % slides.length);
+    },
+    [slides.length],
+  );
+
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (
+        target?.isContentEditable ||
+        target?.closest(
+          'input, textarea, select, [role="combobox"], [role="listbox"], [role="slider"], .MuiSlider-root',
+        )
+      ) {
+        return;
+      }
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        goToSlide(-1);
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        goToSlide(1);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [goToSlide]);
 
   const current = slides[index];
   const currentAuthorHidden = frontendConfigLoading || rankingAnonymized;
@@ -224,7 +259,7 @@ export function LandingPage() {
                   mb: 1,
                 }}
               >
-                Art, gently judged.
+                Art for TV-Dreams.
               </Typography>
               <Typography
                 sx={{
@@ -370,11 +405,63 @@ export function LandingPage() {
               )}
             </Box>
           )}
+          {slides.length > 1 && (
+            <Box sx={{ display: "flex", alignItems: "center", gap: 0.1, flexShrink: 0 }}>
+              <Tooltip title="Previous artwork">
+                <IconButton
+                  size="small"
+                  aria-label="Previous artwork"
+                  onClick={() => goToSlide(-1)}
+                  sx={{
+                    color: "rgba(255,255,255,.74)",
+                    "&:hover": { background: "rgba(255,255,255,.1)", color: "#fff" },
+                  }}
+                >
+                  <ChevronLeftRounded fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Next artwork">
+                <IconButton
+                  size="small"
+                  aria-label="Next artwork"
+                  onClick={() => goToSlide(1)}
+                  sx={{
+                    color: "rgba(255,255,255,.74)",
+                    "&:hover": { background: "rgba(255,255,255,.1)", color: "#fff" },
+                  }}
+                >
+                  <ChevronRightRounded fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            </Box>
+          )}
           {!loadingSlides && slides.length === 0 && (
             <Button size="small" onClick={() => setReloadToken((n) => n + 1)}>
               retry
             </Button>
           )}
+        </Box>
+      )}
+
+      {slides.length > 1 && (
+        <Box
+          aria-hidden
+          sx={{
+            position: "fixed",
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: 3,
+            zIndex: 35,
+            pointerEvents: "none",
+            background: "rgba(255,255,255,.16)",
+          }}
+        >
+          <Box
+            key={`${period}-${index}-${current?.id ?? ""}`}
+            className="slide-progress-fill"
+            sx={{ animationDuration: `${SLIDE_INTERVAL_MS}ms` }}
+          />
         </Box>
       )}
 
