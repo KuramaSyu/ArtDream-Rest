@@ -1,4 +1,4 @@
-import { Box, CircularProgress, Typography } from "@mui/material";
+import { Box, CircularProgress, Typography, alpha, useTheme } from "@mui/material";
 import type { ReactNode } from "react";
 
 export function LoadingView({ label = "Mixing colors…" }: { label?: string }) {
@@ -47,9 +47,9 @@ export function EmptyState({
   description?: ReactNode;
   action?: ReactNode;
 }) {
+  const theme = useTheme();
   return (
     <Box
-      className="glass"
       sx={{
         borderRadius: 6,
         p: { xs: 4, sm: 6 },
@@ -57,6 +57,9 @@ export function EmptyState({
         display: "grid",
         placeItems: "center",
         gap: 1.2,
+        background: alpha(theme.palette.background.paper, 0.72),
+        border: `1px solid ${alpha(theme.palette.text.primary, 0.12)}`,
+        boxShadow: `0 16px 44px ${alpha(theme.palette.common.black, 0.3)}, inset 0 1px 0 ${alpha(theme.palette.text.primary, 0.05)}`,
       }}
     >
       <Box sx={{ fontSize: "2.6rem", animation: "bob 5s ease-in-out infinite" }}>{emoji}</Box>

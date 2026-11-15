@@ -285,3 +285,45 @@ export function useStageImages(urls: Array<string | undefined | null> | undefine
     setStageImages(prepared);
   }, [key, setStageImages]);
 }
+
+/**
+ * Make the theme follow one specific artwork. Used by the ranking page where
+ * the hovered/clicked side decides which image drives the palette. A single
+ * staged image is applied immediately (no random pick, no idle delay).
+ */
+export function useStageImage(url: string | null | undefined): void {
+  const urls = useMemo(() => (url ? [url] : []), [url]);
+  useStageImages(urls);
+}
+
+/**
+ * Build (or read from the swatch cache) the palette of one artwork without
+ * touching the global theme. The ranking page uses this to give each rating
+ * button its own stable ThemeProvider for the current pair.
+ */
+export function useImageTheme(url: string | null | undefined): CustomTheme | null {
+  const [theme, setTheme] = useState<CustomTheme | null>(null);
+  const prepared = useMemo(() => (url ? themeSource(url) : ""), [url]);
+  useEffect(() => {
+    if (!prepared) {
+      setTheme(null);
+      return;
+    }
+    // Drop the previous pair's palette immediately so buttons never mix
+    // colours from two different artworks while the new pair loads.
+    setTheme(null);
+    let cancelled = false;
+    void themeForImage(prepared)
+      .then((next) => {
+        if (!cancelled) setTheme(next);
+      })
+      .catch((error) => {
+        console.warn("ArtDream theme generation failed", error);
+        if (!cancelled) setTheme(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [prepared]);
+  return theme;
+}

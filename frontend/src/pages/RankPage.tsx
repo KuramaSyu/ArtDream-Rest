@@ -13,6 +13,7 @@ import {
   IconButton,
   MenuItem,
   TextField,
+  ThemeProvider,
   Tooltip,
   Typography,
   alpha,
@@ -32,6 +33,7 @@ import {
 } from "@mui/icons-material";
 import { AnimatePresence, motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
+import type { Theme } from "@mui/material/styles";
 import { api, ApiError, imageVariant } from "../api/client";
 import type {
   ImageItem,
@@ -44,7 +46,7 @@ import { useAuth } from "../auth/AuthContext";
 import { EmptyState, LoadingView } from "../components/Loading";
 import { PageShell } from "../components/PageShell";
 import { useToast } from "../components/Feedback";
-import { useStageImages } from "../theme/ThemeHost";
+import { useImageTheme, useStageImage } from "../theme/ThemeHost";
 import { useFrontendConfig } from "../config/FrontendConfig";
 import {
   getAnonymousVoterId,
@@ -91,6 +93,7 @@ const FIVE_RATE_HINTS = [
 ] as const;
 
 function Keycap({ children }: { children: string }) {
+  const theme = useTheme();
   return (
     <Box
       component="kbd"
@@ -102,8 +105,8 @@ function Keycap({ children }: { children: string }) {
         height: 22,
         px: 0.6,
         borderRadius: 0.8,
-        border: "1px solid rgba(255,255,255,.2)",
-        background: "rgba(255,255,255,.06)",
+        border: `1px solid ${alpha(theme.palette.text.primary, 0.2)}`,
+        background: alpha(theme.palette.text.primary, 0.06),
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
         fontSize: "0.68rem",
         lineHeight: 1,
@@ -116,6 +119,116 @@ function Keycap({ children }: { children: string }) {
   );
 }
 
+type ZoneButtonProps = {
+  hint: (typeof FIVE_RATE_HINTS)[number];
+  rating: number;
+  active: boolean;
+  disabled: boolean;
+  onHover: () => void;
+  onLeave: () => void;
+  onPick: () => void;
+};
+
+/**
+ * One of the five rating columns. It renders inside a per-button
+ * ThemeProvider, so its palette is the artwork it favours and stays stable
+ * while the pointer moves across the page.
+ */
+function ZoneButton({
+  hint,
+  rating,
+  active,
+  disabled,
+  onHover,
+  onLeave,
+  onPick,
+}: ZoneButtonProps) {
+  const theme = useTheme();
+  const tint =
+    rating < 3
+      ? theme.palette.primary.main
+      : rating > 3
+        ? theme.palette.secondary.main
+        : theme.palette.text.primary;
+  return (
+    <Box
+      role="button"
+      tabIndex={disabled ? -1 : 0}
+      aria-disabled={disabled}
+      aria-label={`Rate ${rating} of 5, ${hint.label}`}
+      onMouseEnter={() => {
+        if (!disabled) onHover();
+      }}
+      onFocus={() => {
+        if (!disabled) onHover();
+      }}
+      onBlur={onLeave}
+      onClick={() => {
+        if (!disabled) onPick();
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          if (!disabled) onPick();
+        }
+      }}
+      sx={{
+        position: "relative",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: { xs: 0.35, md: 0.5 },
+        minHeight: { xs: 40, md: 86 },
+        px: { xs: 0.4, md: 1.5 },
+        borderRadius: 3,
+        cursor: disabled ? "default" : "pointer",
+        outline: "none",
+        background: active
+          ? `linear-gradient(135deg, ${alpha(tint, 0.3)}, ${alpha(tint, 0.1)})`
+          : alpha(theme.palette.text.primary, 0.035),
+        border: active
+          ? `1.5px solid ${alpha(tint, 0.85)}`
+          : `1.5px solid ${alpha(theme.palette.text.primary, 0.09)}`,
+        boxShadow: active ? `0 14px 38px ${alpha(tint, 0.28)}` : "none",
+        transform: active ? "translateY(-2px)" : "none",
+        transition:
+          "background 180ms ease, border-color 180ms ease, transform 180ms ease, box-shadow 180ms ease",
+        "&:focus-visible": {
+          boxShadow: `0 0 0 2px ${alpha(tint, 0.9)}`,
+        },
+      }}
+    >
+      <Box
+        component="span"
+        sx={{
+          fontSize: { xs: "1.15rem", md: "1.7rem" },
+          fontWeight: 700,
+          lineHeight: 1,
+          color: active ? tint : "text.primary",
+          opacity: active ? 1 : 0.9,
+        }}
+      >
+        {rating}
+      </Box>
+      <Box
+        component="span"
+        sx={{
+          display: { xs: "none", md: "block" },
+          fontSize: "0.6rem",
+          letterSpacing: "0.12em",
+          textTransform: "uppercase",
+          color: "text.secondary",
+          opacity: active ? 0.95 : 0.6,
+          whiteSpace: "nowrap",
+        }}
+      >
+        {hint.label}
+      </Box>
+    </Box>
+  );
+}
+
 type DuelPanelProps = {
   leftName: string;
   rightName: string;
@@ -124,6 +237,9 @@ type DuelPanelProps = {
   onZoneChange: (zone: number | null) => void;
   onPick: (side: Side) => void;
   onRate: (rating: number) => void;
+  leftTheme: Theme | null;
+  rightTheme: Theme | null;
+  tieTheme: Theme | null;
 };
 
 function DuelPanel({
@@ -134,6 +250,9 @@ function DuelPanel({
   onZoneChange,
   onPick,
   onRate,
+  leftTheme,
+  rightTheme,
+  tieTheme,
 }: DuelPanelProps) {
   const theme = useTheme();
   const activeZone = zone;
@@ -200,90 +319,20 @@ function DuelPanel({
       >
         {FIVE_RATE_HINTS.map((hint, index) => {
           const rating = index + 1;
-          const active = activeZone === rating;
-          const tint =
-            rating < 3
-              ? theme.palette.primary.main
-              : rating > 3
-                ? theme.palette.secondary.main
-                : theme.palette.text.primary;
+          const themeForButton =
+            rating < 3 ? leftTheme : rating > 3 ? rightTheme : tieTheme;
           return (
-            <Box
-              key={hint.key}
-              role="button"
-              tabIndex={disabled ? -1 : 0}
-              aria-disabled={disabled}
-              aria-label={`Rate ${rating} of 5, ${hint.label}`}
-              onMouseEnter={() => {
-                if (!disabled) onZoneChange(rating);
-              }}
-              onFocus={() => {
-                if (!disabled) onZoneChange(rating);
-              }}
-              onBlur={() => onZoneChange(null)}
-              onClick={() => {
-                if (!disabled) onRate(rating);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  if (!disabled) onRate(rating);
-                }
-              }}
-              sx={{
-                position: "relative",
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: { xs: 0.35, md: 0.5 },
-                minHeight: { xs: 40, md: 86 },
-                px: { xs: 0.4, md: 1.5 },
-                borderRadius: 3,
-                cursor: disabled ? "default" : "pointer",
-                outline: "none",
-                background: active
-                  ? `linear-gradient(135deg, ${alpha(tint, 0.3)}, ${alpha(tint, 0.1)})`
-                  : "rgba(255,255,255,.035)",
-                border: active
-                  ? `1.5px solid ${alpha(tint, 0.85)}`
-                  : "1.5px solid rgba(255,255,255,.09)",
-                boxShadow: active ? `0 14px 38px ${alpha(tint, 0.28)}` : "none",
-                transform: active ? "translateY(-2px)" : "none",
-                transition:
-                  "background 180ms ease, border-color 180ms ease, transform 180ms ease, box-shadow 180ms ease",
-                "&:focus-visible": {
-                  boxShadow: `0 0 0 2px ${alpha(tint, 0.9)}`,
-                },
-              }}
-            >
-              <Box
-                component="span"
-                sx={{
-                  fontSize: { xs: "1.15rem", md: "1.7rem" },
-                  fontWeight: 700,
-                  lineHeight: 1,
-                  color: active ? tint : "text.primary",
-                  opacity: active ? 1 : 0.9,
-                }}
-              >
-                {rating}
-              </Box>
-              <Box
-                component="span"
-                sx={{
-                  display: { xs: "none", md: "block" },
-                  fontSize: "0.6rem",
-                  letterSpacing: "0.12em",
-                  textTransform: "uppercase",
-                  color: "text.secondary",
-                  opacity: active ? 0.95 : 0.6,
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {hint.label}
-              </Box>
-            </Box>
+            <ThemeProvider key={hint.key} theme={themeForButton ?? theme}>
+              <ZoneButton
+                hint={hint}
+                rating={rating}
+                active={activeZone === rating}
+                disabled={disabled}
+                onHover={() => onZoneChange(rating)}
+                onLeave={() => onZoneChange(null)}
+                onPick={() => onRate(rating)}
+              />
+            </ThemeProvider>
           );
         })}
       </Box>
@@ -335,6 +384,8 @@ export function RankPage() {
   const { user } = useAuth();
   const { notify } = useToast();
   const theme = useTheme();
+  const text = theme.palette.text.primary;
+  const black = theme.palette.common.black;
   const isWideLayout = useMediaQuery(theme.breakpoints.up("md"));
   const { config: frontendConfig, loading: frontendConfigLoading } = useFrontendConfig();
   const rankingAnonymized = frontendConfig.rankingAnonymized;
@@ -385,6 +436,9 @@ export function RankPage() {
 
   const recent = useRef<string[]>([]);
   const startedAt = useRef(Date.now());
+  const lastPickedSide = useRef<Side>("left");
+  const [themeSide, setThemeSide] = useState<Side>("left");
+  const [baseSide, setBaseSide] = useState<Side>("left");
   const ratingFromPoint = useCallback(
     (clientX: number, clientY: number, element: HTMLElement) => {
       const rect = element.getBoundingClientRect();
@@ -397,8 +451,25 @@ export function RankPage() {
     },
     [isWideLayout],
   );
+  // Hovering 1/2 previews the left artwork, 4/5 the right one. 3 (a draw)
+  // deliberately keeps the current palette.
+  const previewZone = useCallback((zone: number | null) => {
+    setActiveZone(zone);
+    if (zone === null || zone === 3) return;
+    setThemeSide(zone < 3 ? "left" : "right");
+  }, []);
+  const activeSide: Side | null =
+    activeZone === null || activeZone === 3 ? null : activeZone < 3 ? "left" : "right";
   const pairUrls = useMemo(() => pair.map((item) => item.url), [pair]);
-  useStageImages(pairUrls);
+  // Build both palettes once per pair. The five rating buttons then use their
+  // own ThemeProvider, so hovering does not regenerate their colours.
+  const leftTheme = useImageTheme(pair[0]?.url);
+  const rightTheme = useImageTheme(pair[1]?.url);
+  const tieTheme = baseSide === "left" ? leftTheme : rightTheme;
+  // The palette follows the image the user is hovering/clicking. On a fresh
+  // pair it follows whichever side was clicked last.
+  const themeUrl = themeSide === "left" ? pair[0]?.url : pair[1]?.url;
+  useStageImage(themeUrl ?? null);
 
   const fiveMode = useMemo(() => {
     return (
@@ -436,6 +507,8 @@ export function RankPage() {
       if (items.length < 2 && exclude.length > 0) {
         items = await api.randomImages(2, [], undefined, requestFilters);
       }
+      setThemeSide(lastPickedSide.current);
+      setBaseSide(lastPickedSide.current);
       setPair(items);
       setPicked(null);
       setActiveZone(null);
@@ -526,6 +599,8 @@ export function RankPage() {
 
   const pick = (side: Side) => {
     if (voting || pair.length < 2) return;
+    lastPickedSide.current = side;
+    setThemeSide(side);
     setPicked(side);
     setActiveZone(side === "left" ? 2 : 4);
     const range = fiveMode.maxValue - fiveMode.minValue;
@@ -547,6 +622,11 @@ export function RankPage() {
     ui: "keyboard-five" | "five-area" | "five-button" = "five-button",
   ) => {
     if (voting || pair.length < 2) return;
+    if (rating !== 3) {
+      const side: Side = rating < 3 ? "left" : "right";
+      lastPickedSide.current = side;
+      setThemeSide(side);
+    }
     const span = fiveMode.maxValue - fiveMode.minValue;
     const value = Math.round(fiveMode.minValue + ((rating - 1) / 4) * span);
     setPicked(rating === 3 ? null : rating < 3 ? "left" : "right");
@@ -629,7 +709,7 @@ export function RankPage() {
               size="small"
               icon={<VisibilityOffRounded sx={{ fontSize: 16 }} />}
               label="authors anonymized"
-              sx={{ background: "rgba(255,255,255,.08)", opacity: 0.8 }}
+              sx={{ background: alpha(text, 0.08), opacity: 0.8 }}
             />
           )}
           <Button
@@ -707,12 +787,12 @@ export function RankPage() {
                 }}
                 onMouseMove={(event) => {
                   if (voting || zonePreviewOpen) return;
-                  setActiveZone(ratingFromPoint(event.clientX, event.clientY, event.currentTarget));
+                  previewZone(ratingFromPoint(event.clientX, event.clientY, event.currentTarget));
                 }}
-                onMouseLeave={() => setActiveZone(null)}
+                onMouseLeave={() => previewZone(null)}
                 onPointerDown={(event) => {
                   if (voting || zonePreviewOpen || event.pointerType === "mouse") return;
-                  setActiveZone(
+                  previewZone(
                     ratingFromPoint(event.clientX, event.clientY, event.currentTarget),
                   );
                 }}
@@ -736,14 +816,21 @@ export function RankPage() {
                   const hideAuthor = hideAuthors;
                   const cardLabel =
                     item.title || (hideAuthor ? "this artwork" : item.author);
+                  const isActive = activeSide === side;
+                  // Tilt the artwork the palette follows: 1/2 leans left,
+                  // 4/5 leans right, 3 stays upright. Deliberately gentle.
+                  const tilt =
+                    isActive && activeZone !== null
+                      ? (activeZone - 3) * 0.8
+                      : isPicked
+                        ? side === "left"
+                          ? -1.2
+                          : 1.2
+                        : 0;
                   return (
                     <motion.div
                       key={item.id}
-                      animate={
-                        isPicked
-                          ? { rotate: side === "left" ? -1.2 : 1.2 }
-                          : { rotate: 0 }
-                      }
+                      animate={{ rotate: tilt }}
                       transition={{ type: "spring", stiffness: 240, damping: 20 }}
                       style={{ position: "relative" }}
                     >
@@ -751,7 +838,18 @@ export function RankPage() {
                         className="image-frame rank-image-card"
                         sx={{
                           height: { xs: "clamp(240px, 38vh, 380px)", md: "clamp(340px, 50vh, 560px)" },
-                          border: "2px solid rgba(255,255,255,.12)",
+                          border: `2px solid ${alpha(text, isActive ? 0.3 : 0.12)}`,
+                          // The artwork being judged keeps a clean edge: no
+                          // drop shadow and no darkening overlay.
+                          boxShadow: isActive ? "none" : `0 24px 70px ${alpha(black, 0.45)}`,
+                          "&::after": {
+                            background: `linear-gradient(180deg, transparent 30%, ${alpha(black, 0.72)})`,
+                            opacity: isActive ? 0 : 0.5,
+                          },
+                          "&:hover::after": { opacity: isActive ? 0 : 1 },
+                          "&:focus-visible": {
+                            boxShadow: `0 0 0 3px ${alpha(text, 0.75)}, 0 24px 70px ${alpha(black, 0.5)}`,
+                          },
                         }}
                       >
                         <img
@@ -780,9 +878,9 @@ export function RankPage() {
                               top: 12,
                               right: 12,
                               zIndex: 4,
-                              color: "#fff",
-                              background: "rgba(10,9,15,.62)",
-                              "&:hover": { background: "rgba(10,9,15,.9)" },
+                              color: text,
+                              background: alpha(theme.palette.background.default, 0.62),
+                              "&:hover": { background: alpha(theme.palette.background.default, 0.9) },
                             }}
                           >
                             <FullscreenRounded fontSize="small" />
@@ -796,8 +894,8 @@ export function RankPage() {
                                 px: 2.4,
                                 py: 1.2,
                                 borderRadius: 99,
-                                background: "rgba(10,9,15,.78)",
-                                border: "1px solid rgba(255,255,255,.24)",
+                                background: alpha(theme.palette.background.default, 0.78),
+                                border: `1px solid ${alpha(text, 0.24)}`,
                                 display: "flex",
                                 alignItems: "center",
                                 gap: 1,
@@ -835,8 +933,8 @@ export function RankPage() {
                                     fontSize: { xs: "1.25rem", md: "1.7rem" },
                                     fontWeight: 600,
                                     lineHeight: 1.1,
-                                    color: "#fff",
-                                    textShadow: "0 2px 18px rgba(0,0,0,.6)",
+                                    color: text,
+                                    textShadow: `0 2px 18px ${alpha(black, 0.6)}`,
                                   }}
                                   noWrap
                                 >
@@ -846,7 +944,7 @@ export function RankPage() {
                               {!hideAuthor && item.author && (
                                 <Typography
                                   sx={{
-                                    color: "rgba(255,255,255,.72)",
+                                    color: alpha(text, 0.72),
                                     fontSize: "0.82rem",
                                     letterSpacing: "0.05em",
                                     textTransform: "uppercase",
@@ -861,8 +959,8 @@ export function RankPage() {
                           <Box
                             sx={{
                               fontSize: "0.7rem",
-                              color: "rgba(255,255,255,.55)",
-                              border: "1px solid rgba(255,255,255,.2)",
+                              color: alpha(text, 0.55),
+                              border: `1px solid ${alpha(text, 0.2)}`,
                               borderRadius: 99,
                               px: 1,
                               py: 0.35,
@@ -898,7 +996,7 @@ export function RankPage() {
                       },
                       borderRadius: "22px",
                       overflow: "hidden",
-                      background: "rgba(8,7,12,.42)",
+                      background: alpha(theme.palette.background.default, 0.42),
                     }}
                   >
                     {FIVE_RATE_HINTS.map((hint, index) => (
@@ -910,11 +1008,11 @@ export function RankPage() {
                           alignItems: "center",
                           justifyContent: "center",
                           gap: { xs: 1.2, md: 0.6 },
-                          border: "1px solid rgba(255,255,255,.14)",
+                          border: `1px solid ${alpha(text, 0.14)}`,
                           background:
                             index % 2 === 0
-                              ? "rgba(255,255,255,.035)"
-                              : "rgba(255,255,255,.015)",
+                              ? alpha(text, 0.035)
+                              : alpha(text, 0.015),
                         }}
                       >
                         <Typography
@@ -931,7 +1029,7 @@ export function RankPage() {
                             fontSize: "0.68rem",
                             letterSpacing: "0.12em",
                             textTransform: "uppercase",
-                            color: "rgba(255,255,255,.72)",
+                            color: alpha(text, 0.72),
                             whiteSpace: "nowrap",
                           }}
                         >
@@ -951,9 +1049,9 @@ export function RankPage() {
                         p: 1.8,
                         borderRadius: 3,
                         textAlign: "center",
-                        background: "rgba(10,9,15,.92)",
-                        border: "1px solid rgba(255,255,255,.16)",
-                        boxShadow: "0 20px 50px rgba(0,0,0,.45)",
+                        background: alpha(theme.palette.background.default, 0.92),
+                        border: `1px solid ${alpha(text, 0.16)}`,
+                        boxShadow: `0 20px 50px ${alpha(black, 0.45)}`,
                       }}
                     >
                       <Typography sx={{ fontWeight: 700, fontSize: "0.92rem" }}>
@@ -992,13 +1090,15 @@ export function RankPage() {
           </AnimatePresence>
 
           <Box
-            className="glass"
             sx={{
               mt: { xs: 2.5, md: 3 },
               borderRadius: 5,
               p: { xs: 2.2, sm: 3 },
               opacity: voting ? 0.75 : 1,
               transition: "opacity 200ms ease",
+              background: alpha(theme.palette.background.paper, 0.72),
+              border: `1px solid ${alpha(text, 0.12)}`,
+              boxShadow: `0 16px 44px ${alpha(black, 0.3)}, inset 0 1px 0 ${alpha(text, 0.05)}`,
             }}
           >
             <DuelPanel
@@ -1006,9 +1106,12 @@ export function RankPage() {
               rightName={rightName}
               disabled={voting || zonePreviewOpen}
               zone={activeZone}
-              onZoneChange={setActiveZone}
+              onZoneChange={previewZone}
               onPick={pick}
               onRate={rateFive}
+              leftTheme={leftTheme}
+              rightTheme={rightTheme}
+              tieTheme={tieTheme}
             />
           </Box>
         </>
@@ -1028,7 +1131,7 @@ export function RankPage() {
         fullScreen
         open={Boolean(fullscreen)}
         onClose={() => setFullscreen(null)}
-        PaperProps={{ sx: { background: "rgba(8,7,12,.97)" } }}
+        PaperProps={{ sx: { background: alpha(theme.palette.background.default, 0.97) } }}
       >
         <Box
           sx={{
@@ -1049,9 +1152,9 @@ export function RankPage() {
               top: { xs: 12, sm: 20 },
               right: { xs: 12, sm: 20 },
               zIndex: 5,
-              color: "#fff",
-              background: "rgba(10,9,15,.65)",
-              "&:hover": { background: "rgba(10,9,15,.92)" },
+              color: text,
+              background: alpha(theme.palette.background.default, 0.65),
+              "&:hover": { background: alpha(theme.palette.background.default, 0.92) },
             }}
           >
             <CloseRounded />
@@ -1089,20 +1192,20 @@ export function RankPage() {
                       right: 0,
                       bottom: 0,
                       p: { xs: 2, sm: 3 },
-                      background: "linear-gradient(0deg, rgba(0,0,0,.72), transparent)",
+                      background: `linear-gradient(0deg, ${alpha(black, 0.72)}, transparent)`,
                       pointerEvents: "none",
                     }}
                   >
                     {fullscreen.title && (
                       <Typography
                         className="display"
-                        sx={{ color: "#fff", fontSize: { xs: "1.4rem", sm: "2rem" }, fontWeight: 620 }}
+                        sx={{ color: text, fontSize: { xs: "1.4rem", sm: "2rem" }, fontWeight: 620 }}
                       >
                         {fullscreen.title}
                       </Typography>
                     )}
                     {!fullscreenAuthorHidden && fullscreen.author && (
-                      <Typography sx={{ color: "rgba(255,255,255,.7)" }}>
+                      <Typography sx={{ color: alpha(text, 0.7) }}>
                         {fullscreen.author}
                       </Typography>
                     )}
