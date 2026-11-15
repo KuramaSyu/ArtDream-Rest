@@ -54,6 +54,20 @@ function scheduleIdle(callback: () => void): () => void {
   return () => window.clearTimeout(id);
 }
 
+// Cross-fade the palette: the class must be on <html> before the new theme is
+// committed, otherwise the browser never sees an old→new colour pair.
+const THEME_FADE_MS = 700;
+let fadeTimer: number | null = null;
+
+function beginThemeFade(): void {
+  document.documentElement.classList.add("theme-fade");
+  if (fadeTimer !== null) window.clearTimeout(fadeTimer);
+  fadeTimer = window.setTimeout(() => {
+    document.documentElement.classList.remove("theme-fade");
+    fadeTimer = null;
+  }, THEME_FADE_MS);
+}
+
 const DEFAULT_THEME = new CustomThemeImpl(
   createTheme({
     palette: {
@@ -181,12 +195,14 @@ export function ThemeHost({ children }: { children: ReactNode }) {
     try {
       const next = await themeForImage(image);
       if (generation.current !== ticket) return true;
+      beginThemeFade();
       setTheme(next);
       setThemeImage(image);
       return true;
     } catch (error) {
       console.warn("ArtDream theme generation failed", error);
       if (generation.current === ticket) {
+        beginThemeFade();
         setTheme(DEFAULT_THEME);
         setThemeImage(image);
       }
@@ -315,7 +331,9 @@ export function useImageTheme(url: string | null | undefined): CustomTheme | nul
     let cancelled = false;
     void themeForImage(prepared)
       .then((next) => {
-        if (!cancelled) setTheme(next);
+        if (cancelled) return;
+        beginThemeFade();
+        setTheme(next);
       })
       .catch((error) => {
         console.warn("ArtDream theme generation failed", error);

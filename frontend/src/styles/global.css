@@ -77,6 +77,17 @@ a {
   background-repeat: repeat;
 }
 
+/* Palette crossfade. ThemeHost adds .theme-fade just before it swaps in a
+   newly generated theme and removes it once the colours have settled, so
+   every element eases from the old palette to the new one. */
+html.theme-fade *,
+html.theme-fade *::before,
+html.theme-fade *::after {
+  transition-property: color, background-color, border-color, box-shadow, fill, stroke;
+  transition-duration: 700ms;
+  transition-timing-function: ease;
+}
+
 /* No backdrop-filter on cards/nav: translucent solids over the static wash
    are visually equivalent here and avoid per-frame full-page blur work. */
 .glass {
