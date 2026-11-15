@@ -6,6 +6,8 @@ export interface PendingSubmission {
   url: string;
   width: number;
   height: number;
+  fromPublicService?: boolean;
+  serviceName?: string;
   createdAt: string;
 }
 

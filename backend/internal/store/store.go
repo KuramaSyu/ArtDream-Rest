@@ -75,7 +75,9 @@ CREATE TABLE IF NOT EXISTS images (
 	claim_token       TEXT NOT NULL DEFAULT '',
 	uploaded_by       INTEGER REFERENCES users(id) ON DELETE SET NULL,
 	created_at        INTEGER NOT NULL,
-	deleted_at        INTEGER
+	deleted_at        INTEGER,
+	from_public_service INTEGER NOT NULL DEFAULT 0,
+	service_name      TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS images_author_idx ON images(author COLLATE NOCASE);
 CREATE INDEX IF NOT EXISTS images_created_idx ON images(created_at);
@@ -140,6 +142,13 @@ CREATE INDEX IF NOT EXISTS votes_mode_idx ON votes(mode_id);
 	if err := s.ensureColumn(ctx, "images", "claim_token", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
+	// Public-service provenance was added later; existing images stay private.
+	if err := s.ensureColumn(ctx, "images", "from_public_service", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "images", "service_name", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 
 	now := time.Now().Unix()
 	if _, err := s.db.ExecContext(ctx,
@@ -147,6 +156,12 @@ CREATE INDEX IF NOT EXISTS votes_mode_idx ON votes(mode_id);
 		now,
 	); err != nil {
 		return fmt.Errorf("seed frontend config: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO app_config (key, value, updated_at) VALUES ('default_image_visibility', 'all', ?)`,
+		now,
+	); err != nil {
+		return fmt.Errorf("seed image visibility default: %w", err)
 	}
 
 	modes := []struct {

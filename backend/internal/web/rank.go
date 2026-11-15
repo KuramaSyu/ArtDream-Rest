@@ -504,7 +504,7 @@ func (s *Server) rankImages(c *gin.Context) {
 	offset := parseOffset(c)
 	ctx := c.Request.Context()
 
-	policy, err := visibilityPolicy(c)
+	policy, err := imageRequestPolicy(c)
 	if err != nil {
 		asStoreError(c, err)
 		return

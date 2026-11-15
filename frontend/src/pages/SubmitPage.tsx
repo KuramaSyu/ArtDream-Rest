@@ -7,8 +7,10 @@ import {
   Chip,
   CircularProgress,
   Divider,
+  FormControlLabel,
   IconButton,
   LinearProgress,
+  Switch,
   TextField,
   Tooltip,
   Typography,
@@ -69,6 +71,8 @@ interface UploadedItem {
   title: string;
   author: string;
   anonymous: boolean;
+  fromPublicService: boolean;
+  serviceName?: string;
   localUrl?: string;
 }
 
@@ -114,6 +118,8 @@ export function SubmitPage() {
   const [previews, setPreviews] = useState<Preview[]>([]);
   const [author, setAuthor] = useState("");
   const [authorTouched, setAuthorTouched] = useState(false);
+  const [fromPublicService, setFromPublicService] = useState(false);
+  const [serviceName, setServiceName] = useState("");
   const [dragging, setDragging] = useState(false);
   const [adding, setAdding] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -342,6 +348,10 @@ export function SubmitPage() {
           form.append("image", preview.file);
           form.append("author", author.trim());
           if (preview.title.trim()) form.append("title", preview.title.trim());
+          if (fromPublicService) {
+            form.append("fromPublicService", "true");
+            if (serviceName.trim()) form.append("serviceName", serviceName.trim());
+          }
           const response = await api.uploadImage(form);
           results.push({ preview, response });
         } catch (uploadError) {
@@ -386,6 +396,8 @@ export function SubmitPage() {
           url: response.image.url,
           width: response.image.width,
           height: response.image.height,
+          fromPublicService: response.image.fromPublicService,
+          serviceName: response.image.serviceName,
           createdAt: response.image.createdAt,
         });
       }
@@ -395,6 +407,8 @@ export function SubmitPage() {
         title: response.image.title,
         author: response.image.author,
         anonymous,
+        fromPublicService: response.image.fromPublicService,
+        serviceName: response.image.serviceName,
         localUrl: result.preview.url,
       });
       successfulKeys.add(result.preview.key);
@@ -431,6 +445,10 @@ export function SubmitPage() {
     if (successes.length > 0) {
       setAuthorTouched(false);
       if (user) setAuthor(user.displayName || user.username);
+      if (failures === 0) {
+        setFromPublicService(false);
+        setServiceName("");
+      }
     }
     setUploading(false);
     setProgress({ done: 0, total: 0 });
@@ -672,6 +690,23 @@ export function SubmitPage() {
                             {item.author}
                           </Typography>
                         )}
+                        <Chip
+                          size="small"
+                          label={
+                            item.fromPublicService
+                              ? item.serviceName
+                                ? `public · ${item.serviceName}`
+                                : "public service"
+                              : "private"
+                          }
+                          sx={{
+                            mt: 0.4,
+                            height: 20,
+                            fontSize: "0.66rem",
+                            background: "rgba(255,255,255,.07)",
+                            opacity: item.fromPublicService ? 0.95 : 0.65,
+                          }}
+                        />
                       </Box>
                     ))}
                   </Box>
@@ -812,6 +847,48 @@ export function SubmitPage() {
               inputProps={{ maxLength: 120 }}
               disabled={uploading}
             />
+
+            <Box
+              sx={{
+                display: "grid",
+                gap: 1.2,
+                p: 1.4,
+                borderRadius: 3,
+                background: "rgba(255,255,255,.035)",
+                border: "1px solid rgba(255,255,255,.08)",
+              }}
+            >
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={fromPublicService}
+                    onChange={(event) => {
+                      setFromPublicService(event.target.checked);
+                      if (!event.target.checked) setServiceName("");
+                    }}
+                    disabled={uploading}
+                  />
+                }
+                label="From a public service"
+                sx={{ m: 0 }}
+              />
+              <Typography variant="caption" color="text.secondary" sx={{ opacity: 0.8 }}>
+                Off means a private image — the default. Turn it on for artwork that already lives
+                on a public platform.
+              </Typography>
+              {fromPublicService && (
+                <TextField
+                  label="Service name (optional)"
+                  value={serviceName}
+                  onChange={(event) => setServiceName(event.target.value)}
+                  size="small"
+                  fullWidth
+                  placeholder="e.g. Instagram, DeviantArt, Behance"
+                  inputProps={{ maxLength: 120 }}
+                  disabled={uploading}
+                />
+              )}
+            </Box>
 
             {previews.length > 0 && (
               <Typography variant="body2" color="text.secondary">

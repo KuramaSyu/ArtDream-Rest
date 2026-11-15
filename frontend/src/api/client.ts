@@ -5,6 +5,7 @@ import type {
   FrontendConfig,
   ImageItem,
   ImageModeration,
+  ImageRequestFilters,
   ListResponse,
   ModerationWindow,
   RankFilters,
@@ -148,14 +149,24 @@ export const api = {
     currentPassword?: string;
   }) => request<{ user: User }>("/auth/me", { method: "PATCH", body }),
 
-  randomImages: (amount = 2, exclude: string[] = [], author?: string) =>
+  randomImages: (
+    amount = 2,
+    exclude: string[] = [],
+    author?: string,
+    filters: ImageRequestFilters = {},
+  ) =>
     request<ImageItem[]>("/images/random", {
-      query: { amount, exclude: exclude.join(","), author },
+      query: { amount, exclude: exclude.join(","), author, ...filters },
     }),
 
-  imagesByAuthor: (author: string, amount = 100, offset = 0) =>
+  imagesByAuthor: (
+    author: string,
+    amount = 100,
+    offset = 0,
+    filters: ImageRequestFilters = {},
+  ) =>
     request<ListWithAuthor<ImageItem>>("/images/author", {
-      query: { author, amount, offset },
+      query: { author, amount, offset, ...filters },
     }),
 
   rank: (query: RankQuery = {}) =>
@@ -168,6 +179,14 @@ export const api = {
         author: query.author,
         titleRegex: query.titleRegex,
         mode: query.mode,
+        visibility: query.visibility,
+        service: query.service,
+        uploadedBy: query.uploadedBy,
+        mine: query.mine,
+        includeAuthors: query.includeAuthors,
+        excludeAuthors: query.excludeAuthors,
+        includeTitles: query.includeTitles,
+        excludeTitles: query.excludeTitles,
       },
     }),
 
@@ -237,8 +256,15 @@ export const api = {
         query: filter as Record<string, QueryValue>,
       }),
 
-    updateImage: (id: string, body: { author?: string; title?: string }) =>
-      request<ImageItem>(`/admin/images/${id}`, { method: "PATCH", body }),
+    updateImage: (
+      id: string,
+      body: {
+        author?: string;
+        title?: string;
+        fromPublicService?: boolean;
+        serviceName?: string;
+      },
+    ) => request<ImageItem>(`/admin/images/${id}`, { method: "PATCH", body }),
 
     deleteImage: (id: string, keepVotes = false) =>
       request<{ deleted: string }>(`/admin/images/${id}`, {
@@ -254,8 +280,9 @@ export const api = {
 
     listUsers: () => request<ListResponse<User>>("/users"),
 
-    updateFrontendConfig: (body: Partial<Pick<FrontendConfig, "rankingAnonymized">>) =>
-      request<FrontendConfig>("/admin/frontend-config", { method: "PATCH", body }),
+    updateFrontendConfig: (
+      body: Partial<Pick<FrontendConfig, "rankingAnonymized" | "defaultImageVisibility">>,
+    ) => request<FrontendConfig>("/admin/frontend-config", { method: "PATCH", body }),
 
     createUser: (body: {
       username: string;

@@ -7,6 +7,24 @@ export interface User {
   createdBy?: number;
 }
 
+export type ImageVisibility = "all" | "public" | "private";
+
+/** Filters accepted by the public image listing, pair and ranking requests. */
+export interface ImageRequestFilters {
+  /** Public-service provenance filter. Omit to use the admin default. */
+  visibility?: ImageVisibility;
+  /** Case-insensitive substring match against the optional service name. */
+  service?: string;
+  /** Comma-separated account ids/usernames, or "me". */
+  uploadedBy?: string;
+  /** Shorthand for uploadedBy=me; requires a signed-in session. */
+  mine?: boolean;
+  includeAuthors?: string;
+  excludeAuthors?: string;
+  includeTitles?: string;
+  excludeTitles?: string;
+}
+
 export interface ImageItem {
   id: string;
   url: string;
@@ -18,6 +36,12 @@ export interface ImageItem {
   height: number;
   sizeBytes: number;
   uploadedBy?: number;
+  /** True when the uploader marked the image as coming from a public service. */
+  fromPublicService: boolean;
+  /** Optional free-text name of that public service (e.g. Instagram). */
+  serviceName?: string;
+  /** Derived convenience field: "public" or "private". */
+  visibility: Exclude<ImageVisibility, "all">;
   createdAt: string;
   deletedAt?: string;
 }
@@ -149,12 +173,14 @@ export interface ListResponse<T> {
 /** Server-backed display decisions enforced by the frontend. */
 export interface FrontendConfig {
   rankingAnonymized: boolean;
+  /** Fallback public/private mode for image requests that omit visibility. */
+  defaultImageVisibility: ImageVisibility;
   updatedAt?: string;
 }
 
 export type TimeRange = "day" | "week" | "month" | "year" | "all" | "custom";
 
-export interface RankQuery {
+export interface RankQuery extends ImageRequestFilters {
   time?: TimeRange;
   amount?: number;
   offset?: number;
@@ -188,7 +214,7 @@ export interface VoteUpdatePayload {
   durationMs?: number;
 }
 
-export interface AdminFilter {
+export interface AdminFilter extends ImageRequestFilters {
   time?: TimeRange;
   seconds?: number;
   user?: string;

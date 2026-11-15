@@ -15,11 +15,14 @@ interface FrontendConfigContextValue {
   loading: boolean;
   refresh: () => Promise<void>;
   update: (
-    next: Partial<Pick<FrontendConfig, "rankingAnonymized">>,
+    next: Partial<Pick<FrontendConfig, "rankingAnonymized" | "defaultImageVisibility">>,
   ) => Promise<FrontendConfig>;
 }
 
-const DEFAULTS: FrontendConfig = { rankingAnonymized: false };
+const DEFAULTS: FrontendConfig = {
+  rankingAnonymized: false,
+  defaultImageVisibility: "all",
+};
 
 const FrontendConfigContext = createContext<FrontendConfigContextValue | null>(null);
 
@@ -47,7 +50,9 @@ export function FrontendConfigProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const update = useCallback(
-    async (next: Partial<Pick<FrontendConfig, "rankingAnonymized">>) => {
+    async (
+      next: Partial<Pick<FrontendConfig, "rankingAnonymized" | "defaultImageVisibility">>,
+    ) => {
       const updated = await api.admin.updateFrontendConfig(next);
       setConfig(updated);
       return updated;

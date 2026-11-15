@@ -52,6 +52,7 @@ import type {
   AdminRankEntry,
   AdminRankResponse,
   ImageItem,
+  ImageVisibility,
   ModerationWindow,
   RankFilters,
   TimeRange,
@@ -112,7 +113,9 @@ export function AdminPage() {
   const { notify } = useToast();
   const { config: frontendConfig, update: updateFrontendConfig } = useFrontendConfig();
   const rankingAnonymized = frontendConfig.rankingAnonymized;
+  const defaultImageVisibility = frontendConfig.defaultImageVisibility;
   const [rankingBusy, setRankingBusy] = useState(false);
+  const [visibilityBusy, setVisibilityBusy] = useState(false);
   const [tab, setTab] = useState<AdminTab>("rank");
 
   const [rank, setRank] = useState<AdminRankResponse | null>(null);
@@ -402,6 +405,28 @@ export function AdminPage() {
     }
   };
 
+  const saveDefaultVisibility = async (value: ImageVisibility) => {
+    setVisibilityBusy(true);
+    try {
+      await updateFrontendConfig({ defaultImageVisibility: value });
+      notify(
+        `Default image visibility: ${
+          value === "public" ? "public service only" : value === "private" ? "private only" : "all images"
+        }.`,
+        "success",
+      );
+      setRankRefresh((count) => count + 1);
+      setImagesRefresh((count) => count + 1);
+    } catch (error) {
+      notify(
+        error instanceof ApiError ? error.message : "Could not save the visibility default.",
+        "error",
+      );
+    } finally {
+      setVisibilityBusy(false);
+    }
+  };
+
   const saveVote = async (payload: {
     mode: string;
     winner?: VoteWinner;
@@ -424,7 +449,12 @@ export function AdminPage() {
     }
   };
 
-  const saveImage = async (values: { author: string; title: string }) => {
+  const saveImage = async (values: {
+    author: string;
+    title: string;
+    fromPublicService: boolean;
+    serviceName: string;
+  }) => {
     if (!editImage) return;
     setWorking(true);
     try {
@@ -1068,6 +1098,38 @@ export function AdminPage() {
               sx={{ minWidth: 180, ...inputSx }}
               inputProps={{ spellCheck: false }}
             />
+            <TextField
+              select
+              label="Visibility"
+              size="small"
+              value={imageDraft.visibility ?? "all"}
+              onChange={(event) =>
+                setImageDraft({
+                  ...imageDraft,
+                  visibility: event.target.value === "all" ? undefined : (event.target.value as ImageVisibility),
+                })
+              }
+              sx={{ minWidth: 150, ...inputSx }}
+            >
+              <MenuItem value="all">All images</MenuItem>
+              <MenuItem value="public">Public service</MenuItem>
+              <MenuItem value="private">Private</MenuItem>
+            </TextField>
+            <TextField
+              label="Service contains"
+              size="small"
+              value={imageDraft.service ?? ""}
+              onChange={(event) => setImageDraft({ ...imageDraft, service: event.target.value })}
+              sx={{ minWidth: 160, ...inputSx }}
+            />
+            <TextField
+              label="Uploader"
+              size="small"
+              placeholder="me, 3, ada"
+              value={imageDraft.uploadedBy ?? ""}
+              onChange={(event) => setImageDraft({ ...imageDraft, uploadedBy: event.target.value })}
+              sx={{ minWidth: 140, ...inputSx }}
+            />
             <FormControlLabel
               control={
                 <Checkbox
@@ -1142,6 +1204,23 @@ export function AdminPage() {
                       {image.id} · uploaded {relativeTime(image.createdAt)}
                       {image.uploadedBy ? ` · user ${image.uploadedBy}` : " · anonymous"}
                     </Typography>
+                    <Chip
+                      size="small"
+                      label={
+                        image.fromPublicService
+                          ? image.serviceName
+                            ? `public · ${image.serviceName}`
+                            : "public service"
+                          : "private"
+                      }
+                      sx={{
+                        mt: 0.5,
+                        height: 20,
+                        fontSize: "0.66rem",
+                        background: "rgba(255,255,255,.07)",
+                        opacity: image.fromPublicService ? 0.95 : 0.65,
+                      }}
+                    />
                     <Box
                       sx={{
                         display: "flex",
@@ -1186,6 +1265,30 @@ export function AdminPage() {
             {rankFiltersConfig.includeAuthors.length} included author ·{" "}
             {rankFiltersConfig.includeTitles.length} included title patterns.
           </Alert>
+
+          <FilterCard>
+            <Box sx={{ flex: 1, minWidth: 220 }}>
+              <Typography sx={{ fontWeight: 700 }}>Default image visibility</Typography>
+              <Typography variant="body2" color="text.secondary">
+                Used by image, pair and ranking requests that do not send their own
+                <code> visibility </code> filter. Uploads default to private unless the uploader
+                marks them as coming from a public service.
+              </Typography>
+            </Box>
+            <TextField
+              select
+              size="small"
+              label="Return by default"
+              value={defaultImageVisibility}
+              onChange={(event) => void saveDefaultVisibility(event.target.value as ImageVisibility)}
+              disabled={visibilityBusy}
+              sx={{ minWidth: 190, ...inputSx }}
+            >
+              <MenuItem value="all">All images</MenuItem>
+              <MenuItem value="public">Public service only</MenuItem>
+              <MenuItem value="private">Private only</MenuItem>
+            </TextField>
+          </FilterCard>
 
           {rulesLoading ? (
             <LoadingView label="Reading the rules…" />
@@ -1498,6 +1601,9 @@ function describeFilters(filter: AdminFilter): string {
   if (filter.author) parts.push(`author=${filter.author}`);
   if (filter.titleRegex) parts.push(`title~/${filter.titleRegex}/`);
   if (filter.mode) parts.push(`mode=${filter.mode}`);
+  if (filter.visibility) parts.push(`visibility=${filter.visibility}`);
+  if (filter.service) parts.push(`service~${filter.service}`);
+  if (filter.uploadedBy) parts.push(`uploadedBy=${filter.uploadedBy}`);
   return parts.length > 0 ? parts.join(", ") : "none";
 }
 
@@ -1804,15 +1910,24 @@ function ImageEditDialog({
   image: ImageItem | null;
   working: boolean;
   onClose: () => void;
-  onSave: (values: { author: string; title: string }) => void;
+  onSave: (values: {
+    author: string;
+    title: string;
+    fromPublicService: boolean;
+    serviceName: string;
+  }) => void;
 }) {
   const [author, setAuthor] = useState("");
   const [title, setTitle] = useState("");
+  const [fromPublicService, setFromPublicService] = useState(false);
+  const [serviceName, setServiceName] = useState("");
 
   useEffect(() => {
     if (image) {
       setAuthor(image.author);
       setTitle(image.title);
+      setFromPublicService(image.fromPublicService);
+      setServiceName(image.serviceName ?? "");
     }
   }, [image]);
 
@@ -1843,13 +1958,47 @@ function ImageEditDialog({
           fullWidth
           size="small"
         />
+        <FormControlLabel
+          sx={{ mt: 1 }}
+          control={
+            <Switch
+              checked={fromPublicService}
+              onChange={(event) => {
+                setFromPublicService(event.target.checked);
+                if (!event.target.checked) setServiceName("");
+              }}
+            />
+          }
+          label="From a public service"
+        />
+        {fromPublicService && (
+          <TextField
+            label="Service name (optional)"
+            value={serviceName}
+            onChange={(event) => setServiceName(event.target.value)}
+            fullWidth
+            size="small"
+            sx={{ mt: 1 }}
+            placeholder="e.g. Instagram, DeviantArt"
+          />
+        )}
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.6 }}>
+          Off means a private image (the default).
+        </Typography>
       </DialogContent>
       <DialogActions sx={{ px: 3, pb: 2.5 }}>
         <Button onClick={onClose} disabled={working} color="inherit">
           Cancel
         </Button>
         <Button
-          onClick={() => onSave({ author: author.trim(), title })}
+          onClick={() =>
+            onSave({
+              author: author.trim(),
+              title,
+              fromPublicService,
+              serviceName: fromPublicService ? serviceName.trim() : "",
+            })
+          }
           disabled={working || !author.trim()}
           variant="contained"
         >

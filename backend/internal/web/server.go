@@ -34,9 +34,11 @@ func (s *Server) Router() *gin.Engine {
 	api.POST("/auth/register", s.register)
 	api.POST("/images", s.optionalAuth(), s.uploadImage)
 
-	api.GET("/images/author", s.imagesByAuthor)
-	api.GET("/images/random", s.randomImages)
-	api.GET("/images/rank", s.rankImages)
+	// Optional auth lets the request filters use mine=true / uploadedBy=me
+	// without making the public listings login-only.
+	api.GET("/images/author", s.optionalAuth(), s.imagesByAuthor)
+	api.GET("/images/random", s.optionalAuth(), s.randomImages)
+	api.GET("/images/rank", s.optionalAuth(), s.rankImages)
 	api.GET("/rank/modes", s.listVoteModes)
 	api.GET("/images/:id", s.serveImage)
 	api.GET("/images/:id/meta", s.imageMeta)

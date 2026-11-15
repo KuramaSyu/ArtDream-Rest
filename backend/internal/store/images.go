@@ -10,20 +10,24 @@ import (
 )
 
 const imageColumns = `id, author, title, original_filename, storage_path, mime_type,
-	width, height, size_bytes, uploaded_by, claim_token, created_at, deleted_at`
+	width, height, size_bytes, uploaded_by, claim_token, created_at, deleted_at,
+	from_public_service, service_name`
 
 func scanImage(row interface{ Scan(...any) error }) (*Image, error) {
 	var img Image
 	var created int64
 	var uploadedBy, deletedAt sql.NullInt64
+	var fromPublicService int
 	if err := row.Scan(&img.ID, &img.Author, &img.Title, &img.OriginalFilename, &img.StoragePath,
-		&img.MimeType, &img.Width, &img.Height, &img.SizeBytes, &uploadedBy, &img.ClaimToken, &created, &deletedAt); err != nil {
+		&img.MimeType, &img.Width, &img.Height, &img.SizeBytes, &uploadedBy, &img.ClaimToken, &created, &deletedAt,
+		&fromPublicService, &img.ServiceName); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
 	img.CreatedAt = unixToTime(created)
+	img.FromPublicService = fromPublicService != 0
 	if uploadedBy.Valid {
 		v := uploadedBy.Int64
 		img.UploadedBy = &v
@@ -41,10 +45,12 @@ func (s *Store) CreateImage(ctx context.Context, img *Image) error {
 	}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO images (id, author, title, original_filename, storage_path, mime_type,
-		 width, height, size_bytes, uploaded_by, claim_token, created_at, deleted_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+		 width, height, size_bytes, uploaded_by, claim_token, created_at, deleted_at,
+		 from_public_service, service_name)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
 		img.ID, img.Author, img.Title, img.OriginalFilename, img.StoragePath, img.MimeType,
-		img.Width, img.Height, img.SizeBytes, img.UploadedBy, img.ClaimToken, timeToUnix(img.CreatedAt))
+		img.Width, img.Height, img.SizeBytes, img.UploadedBy, img.ClaimToken, timeToUnix(img.CreatedAt),
+		boolInt(img.FromPublicService), img.ServiceName)
 	return err
 }
 
@@ -84,10 +90,18 @@ func (s *Store) GetImagesByIDs(ctx context.Context, ids []string) (map[string]*I
 // ImagesByAuthor lists an author's images, newest first. Images hidden by the
 // configured allow/deny lists are omitted (and not counted in the total).
 func (s *Store) ImagesByAuthor(ctx context.Context, author string, limit, offset int, policy *VisibilityPolicy) ([]Image, int, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+imageColumns+` FROM images
-		 WHERE deleted_at IS NULL AND author = ? COLLATE NOCASE
-		 ORDER BY created_at DESC, id ASC`, author)
+	query := `SELECT ` + imageColumns + ` FROM images WHERE deleted_at IS NULL`
+	args := make([]any, 0, 4)
+	if strings.TrimSpace(author) != "" {
+		query += ` AND author = ? COLLATE NOCASE`
+		args = append(args, author)
+	}
+	if where, filterArgs := policy.SQLFilter(""); where != "" {
+		query += where
+		args = append(args, filterArgs...)
+	}
+	query += ` ORDER BY created_at DESC, id ASC`
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -129,6 +143,10 @@ func (s *Store) RandomImages(ctx context.Context, amount int, author string, exc
 	if strings.TrimSpace(author) != "" {
 		query += ` AND author = ? COLLATE NOCASE`
 		args = append(args, author)
+	}
+	if where, filterArgs := policy.SQLFilter(""); where != "" {
+		query += where
+		args = append(args, filterArgs...)
 	}
 	exclude = compactUnique(exclude)
 	if len(exclude) > 0 {
@@ -178,6 +196,25 @@ func (s *Store) ListImages(ctx context.Context, f ImageFilter) ([]Image, int, er
 	if author := strings.TrimSpace(f.Author); author != "" {
 		query += ` AND author LIKE ? COLLATE NOCASE`
 		args = append(args, "%"+author+"%")
+	}
+	switch strings.ToLower(strings.TrimSpace(f.Visibility)) {
+	case VisibilityPublic:
+		query += ` AND from_public_service = 1`
+	case VisibilityPrivate:
+		query += ` AND from_public_service = 0`
+	}
+	if service := strings.TrimSpace(f.Service); service != "" {
+		query += ` AND LOWER(service_name) LIKE ?`
+		args = append(args, "%"+strings.ToLower(service)+"%")
+	}
+	if len(f.UploadedBy) > 0 {
+		ids := compactUniqueInt64(f.UploadedBy)
+		if len(ids) > 0 {
+			query += ` AND uploaded_by IN (` + placeholders(len(ids)) + `)`
+			for _, id := range ids {
+				args = append(args, id)
+			}
+		}
 	}
 	query += ` ORDER BY created_at DESC, id ASC`
 
@@ -267,7 +304,7 @@ func (s *Store) GetImagesIncludingDeleted(ctx context.Context, ids []string) (ma
 // ErrInvalidFilter signals a malformed filter (e.g. bad regex).
 var ErrInvalidFilter = errors.New("invalid filter")
 
-func (s *Store) UpdateImage(ctx context.Context, id string, author, title *string) error {
+func (s *Store) UpdateImage(ctx context.Context, id string, author, title *string, fromPublicService *bool, serviceName *string) error {
 	if author != nil {
 		if _, err := s.db.ExecContext(ctx, `UPDATE images SET author = ? WHERE id = ?`, *author, id); err != nil {
 			return err
@@ -275,6 +312,16 @@ func (s *Store) UpdateImage(ctx context.Context, id string, author, title *strin
 	}
 	if title != nil {
 		if _, err := s.db.ExecContext(ctx, `UPDATE images SET title = ? WHERE id = ?`, *title, id); err != nil {
+			return err
+		}
+	}
+	if fromPublicService != nil {
+		if _, err := s.db.ExecContext(ctx, `UPDATE images SET from_public_service = ? WHERE id = ?`, boolInt(*fromPublicService), id); err != nil {
+			return err
+		}
+	}
+	if serviceName != nil {
+		if _, err := s.db.ExecContext(ctx, `UPDATE images SET service_name = ? WHERE id = ?`, *serviceName, id); err != nil {
 			return err
 		}
 	}
@@ -328,6 +375,22 @@ func placeholders(n int) string {
 		parts[i] = "?"
 	}
 	return strings.Join(parts, ",")
+}
+
+func compactUniqueInt64(in []int64) []int64 {
+	seen := make(map[int64]struct{}, len(in))
+	out := make([]int64, 0, len(in))
+	for _, v := range in {
+		if v <= 0 {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	return out
 }
 
 func compactUnique(in []string) []string {

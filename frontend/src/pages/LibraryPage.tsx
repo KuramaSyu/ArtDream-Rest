@@ -2,12 +2,15 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Box,
   Button,
+  Checkbox,
   Chip,
   Dialog,
   DialogContent,
   DialogTitle,
+  FormControlLabel,
   IconButton,
   InputAdornment,
+  MenuItem,
   TextField,
   Tooltip,
   Typography,
@@ -21,7 +24,7 @@ import {
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { api, ApiError, imageVariant } from "../api/client";
-import type { ImageItem } from "../api/types";
+import type { ImageItem, ImageVisibility } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { EmptyState, LoadingView } from "../components/Loading";
 import { PageHeader, PageShell } from "../components/PageShell";
@@ -41,13 +44,17 @@ export function LibraryPage() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<ImageItem | null>(null);
+  const [visibility, setVisibility] = useState<"" | ImageVisibility>("");
+  const [service, setService] = useState("");
+  const [onlyMine, setOnlyMine] = useState(false);
 
   const urls = useMemo(() => images.map((item) => item.url), [images]);
   useStageImages(urls);
 
   const load = useCallback(
     async (name: string) => {
-      if (!name.trim()) {
+      const mine = Boolean(user && onlyMine);
+      if (!name.trim() && !mine) {
         setImages([]);
         setTotal(0);
         setLoading(false);
@@ -55,7 +62,11 @@ export function LibraryPage() {
       }
       setLoading(true);
       try {
-        const result = await api.imagesByAuthor(name.trim(), 200, 0);
+        const result = await api.imagesByAuthor(name.trim(), 200, 0, {
+          visibility: visibility || undefined,
+          service: service.trim() || undefined,
+          mine: mine || undefined,
+        });
         setImages(result.items);
         setTotal(result.total);
       } catch (error) {
@@ -65,7 +76,7 @@ export function LibraryPage() {
         setLoading(false);
       }
     },
-    [notify],
+    [notify, onlyMine, service, user, visibility],
   );
 
   useEffect(() => {
@@ -134,9 +145,57 @@ export function LibraryPage() {
         <Button onClick={search} variant="outlined" sx={{ borderRadius: 99, textTransform: "none" }}>
           Find
         </Button>
-        {author && (
+        <TextField
+          select
+          size="small"
+          label="Visibility"
+          value={visibility}
+          onChange={(event) => setVisibility(event.target.value as "" | ImageVisibility)}
+          sx={{ minWidth: 145 }}
+        >
+          <MenuItem value="">Admin default</MenuItem>
+          <MenuItem value="all">All images</MenuItem>
+          <MenuItem value="public">Public service</MenuItem>
+          <MenuItem value="private">Private</MenuItem>
+        </TextField>
+        <TextField
+          size="small"
+          label="Service contains"
+          value={service}
+          onChange={(event) => setService(event.target.value)}
+          sx={{ minWidth: 150 }}
+        />
+        {user && (
+          <>
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={onlyMine}
+                  onChange={(event) => setOnlyMine(event.target.checked)}
+                />
+              }
+              label="only mine"
+            />
+            <Button
+              size="small"
+              onClick={() => {
+                setQuery("");
+                setAuthor("");
+                setOnlyMine(true);
+              }}
+              sx={{ textTransform: "none" }}
+            >
+              My uploads
+            </Button>
+          </>
+        )}
+        {(author || (user && onlyMine)) && (
           <Chip
-            label={`${total} ${total === 1 ? "piece" : "pieces"} by ${author}`}
+            label={
+              author
+                ? `${total} ${total === 1 ? "piece" : "pieces"} by ${author}`
+                : `${total} of your ${total === 1 ? "piece" : "pieces"}`
+            }
             size="small"
             sx={{ background: "rgba(255,255,255,.07)" }}
           />

@@ -17,19 +17,21 @@ type User struct {
 // Image is an uploaded artwork. StoragePath points at the pristine upload on
 // disk; derivative formats are rendered on demand and cached separately.
 type Image struct {
-	ID               string     `json:"id"`
-	Author           string     `json:"author"`
-	Title            string     `json:"title"`
-	OriginalFilename string     `json:"originalFilename,omitempty"`
-	StoragePath      string     `json:"-"`
-	MimeType         string     `json:"mimeType"`
-	Width            int        `json:"width"`
-	Height           int        `json:"height"`
-	SizeBytes        int64      `json:"sizeBytes"`
-	ClaimToken       string     `json:"-"`
-	UploadedBy       *int64     `json:"uploadedBy,omitempty"`
-	CreatedAt        time.Time  `json:"createdAt"`
-	DeletedAt        *time.Time `json:"deletedAt,omitempty"`
+	ID                string     `json:"id"`
+	Author            string     `json:"author"`
+	Title             string     `json:"title"`
+	OriginalFilename  string     `json:"originalFilename,omitempty"`
+	StoragePath       string     `json:"-"`
+	MimeType          string     `json:"mimeType"`
+	Width             int        `json:"width"`
+	Height            int        `json:"height"`
+	SizeBytes         int64      `json:"sizeBytes"`
+	ClaimToken        string     `json:"-"`
+	UploadedBy        *int64     `json:"uploadedBy,omitempty"`
+	FromPublicService bool       `json:"fromPublicService"`
+	ServiceName       string     `json:"serviceName,omitempty"`
+	CreatedAt         time.Time  `json:"createdAt"`
+	DeletedAt         *time.Time `json:"deletedAt,omitempty"`
 }
 
 // VoteMode describes a voting scale. Binary modes use Winner/Loser; value
@@ -77,6 +79,9 @@ type UserFilter struct {
 type ImageFilter struct {
 	Author         string
 	TitleRegex     string
+	Visibility     string
+	Service        string
+	UploadedBy     []int64
 	IncludeDeleted bool
 	Limit          int
 	Offset         int
@@ -89,12 +94,15 @@ type ImageFilter struct {
 // Include lists are allowlists (an image must match at least one regex in
 // every non-empty include list). Exclude lists always win over includes.
 type AppConfig struct {
-	RankingAnonymized bool      `json:"rankingAnonymized"`
-	ExcludeAuthors    []string  `json:"excludeAuthors"`
-	ExcludeTitles     []string  `json:"excludeTitles"`
-	IncludeAuthors    []string  `json:"includeAuthors"`
-	IncludeTitles     []string  `json:"includeTitles"`
-	UpdatedAt         time.Time `json:"updatedAt"`
+	RankingAnonymized bool `json:"rankingAnonymized"`
+	// DefaultImageVisibility is the fallback when an image request omits the
+	// visibility parameter. It is one of "all", "public" or "private".
+	DefaultImageVisibility string    `json:"defaultImageVisibility"`
+	ExcludeAuthors         []string  `json:"excludeAuthors"`
+	ExcludeTitles          []string  `json:"excludeTitles"`
+	IncludeAuthors         []string  `json:"includeAuthors"`
+	IncludeTitles          []string  `json:"includeTitles"`
+	UpdatedAt              time.Time `json:"updatedAt"`
 }
 
 // VoteFilter narrows a vote listing. Author and TitleRegex are matched

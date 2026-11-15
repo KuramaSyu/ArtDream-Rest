@@ -234,9 +234,20 @@ func filterFromQuery(c *gin.Context) (store.VoteFilter, store.ImageFilter, range
 	if vf.Author == "" {
 		vf.Author = trimTo(c.Query("authorName"), 120)
 	}
+	uploadedBy, err := parseUploaderIDs(c)
+	if err != nil {
+		return store.VoteFilter{}, store.ImageFilter{}, rng, err
+	}
+	visibility, err := store.NormalizeVisibility(c.Query("visibility"))
+	if err != nil {
+		return store.VoteFilter{}, store.ImageFilter{}, rng, err
+	}
 	imgf := store.ImageFilter{
 		Author:         vf.Author,
 		TitleRegex:     vf.TitleRegex,
+		Visibility:     visibility,
+		Service:        trimTo(c.Query("service"), 120),
+		UploadedBy:     uploadedBy,
 		IncludeDeleted: c.Query("includeDeleted") == "true",
 		Limit:          amount,
 		Offset:         offset,
@@ -244,21 +255,133 @@ func filterFromQuery(c *gin.Context) (store.VoteFilter, store.ImageFilter, range
 	return vf, imgf, rng, nil
 }
 
+func queryPatterns(c *gin.Context, keys ...string) []string {
+	var raw []string
+	for _, key := range keys {
+		raw = append(raw, c.QueryArray(key)...)
+	}
+	out := make([]string, 0, len(raw))
+	for _, value := range raw {
+		for _, part := range strings.Split(value, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				out = append(out, part)
+			}
+		}
+	}
+	return out
+}
+
+func truthy(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+// parseUploaderIDs reads uploadedBy/owner plus the mine convenience flag.
+// Values may be numeric account ids or account usernames; "me" resolves to the
+// signed-in account. This lets a client request only their own uploads or a
+// hand-picked group of friends.
+func parseUploaderIDs(c *gin.Context) ([]int64, error) {
+	tokens := make([]string, 0)
+	for _, key := range []string{"uploadedBy", "owner", "uploaders"} {
+		for _, value := range c.QueryArray(key) {
+			for _, part := range strings.Split(value, ",") {
+				if part = strings.TrimSpace(part); part != "" {
+					tokens = append(tokens, part)
+				}
+			}
+		}
+	}
+	if truthy(c.Query("mine")) {
+		tokens = append(tokens, "me")
+	}
+	if len(tokens) == 0 {
+		return nil, nil
+	}
+
+	seen := make(map[int64]struct{}, len(tokens))
+	ids := make([]int64, 0, len(tokens))
+	add := func(id int64) {
+		if id <= 0 {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	for _, token := range tokens {
+		token = strings.TrimPrefix(strings.TrimSpace(token), "@")
+		if strings.EqualFold(token, "me") {
+			user := currentUser(c)
+			if user == nil {
+				return nil, fmt.Errorf("sign in to use uploadedBy=me or mine=true")
+			}
+			add(user.ID)
+			continue
+		}
+		if id, err := strconv.ParseInt(token, 10, 64); err == nil {
+			add(id)
+			continue
+		}
+		user, err := sStore(c).GetUserByUsername(c.Request.Context(), token)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return nil, fmt.Errorf("unknown uploader %q", token)
+			}
+			return nil, err
+		}
+		add(user.ID)
+	}
+	return ids, nil
+}
+
+// imageRequestFromQuery reads the per-request public/private, provenance,
+// uploader and regex filters shared by the public image endpoints.
+func imageRequestFromQuery(c *gin.Context) (store.ImageRequest, error) {
+	uploadedBy, err := parseUploaderIDs(c)
+	if err != nil {
+		return store.ImageRequest{}, err
+	}
+	visibility := trimTo(c.Query("visibility"), 16)
+	if visibility != "" {
+		if _, err := store.NormalizeVisibility(visibility); err != nil {
+			return store.ImageRequest{}, err
+		}
+	}
+	return store.ImageRequest{
+		Visibility:     visibility,
+		Service:        trimTo(c.Query("service"), 120),
+		UploadedBy:     uploadedBy,
+		IncludeAuthors: queryPatterns(c, "includeAuthors", "includeAuthor"),
+		ExcludeAuthors: queryPatterns(c, "excludeAuthors", "excludeAuthor", "blacklistAuthors"),
+		IncludeTitles:  queryPatterns(c, "includeTitles", "includeTitle"),
+		ExcludeTitles:  queryPatterns(c, "excludeTitles", "excludeTitle", "blacklistTitles"),
+	}, nil
+}
+
 // --- DTOs -----------------------------------------------------------------
 
 type imageDTO struct {
-	ID               string     `json:"id"`
-	URL              string     `json:"url"`
-	Author           string     `json:"author"`
-	Title            string     `json:"title"`
-	OriginalFilename string     `json:"originalFilename,omitempty"`
-	MimeType         string     `json:"mimeType"`
-	Width            int        `json:"width"`
-	Height           int        `json:"height"`
-	SizeBytes        int64      `json:"sizeBytes"`
-	UploadedBy       *int64     `json:"uploadedBy,omitempty"`
-	CreatedAt        time.Time  `json:"createdAt"`
-	DeletedAt        *time.Time `json:"deletedAt,omitempty"`
+	ID                string     `json:"id"`
+	URL               string     `json:"url"`
+	Author            string     `json:"author"`
+	Title             string     `json:"title"`
+	OriginalFilename  string     `json:"originalFilename,omitempty"`
+	MimeType          string     `json:"mimeType"`
+	Width             int        `json:"width"`
+	Height            int        `json:"height"`
+	SizeBytes         int64      `json:"sizeBytes"`
+	UploadedBy        *int64     `json:"uploadedBy,omitempty"`
+	FromPublicService bool       `json:"fromPublicService"`
+	ServiceName       string     `json:"serviceName,omitempty"`
+	Visibility        string     `json:"visibility"`
+	CreatedAt         time.Time  `json:"createdAt"`
+	DeletedAt         *time.Time `json:"deletedAt,omitempty"`
 }
 
 func imageToDTO(img *store.Image) imageDTO {
@@ -266,19 +389,29 @@ func imageToDTO(img *store.Image) imageDTO {
 		return imageDTO{}
 	}
 	return imageDTO{
-		ID:               img.ID,
-		URL:              "/api/v1/images/" + img.ID,
-		Author:           img.Author,
-		Title:            img.Title,
-		OriginalFilename: img.OriginalFilename,
-		MimeType:         img.MimeType,
-		Width:            img.Width,
-		Height:           img.Height,
-		SizeBytes:        img.SizeBytes,
-		UploadedBy:       img.UploadedBy,
-		CreatedAt:        img.CreatedAt,
-		DeletedAt:        img.DeletedAt,
+		ID:                img.ID,
+		URL:               "/api/v1/images/" + img.ID,
+		Author:            img.Author,
+		Title:             img.Title,
+		OriginalFilename:  img.OriginalFilename,
+		MimeType:          img.MimeType,
+		Width:             img.Width,
+		Height:            img.Height,
+		SizeBytes:         img.SizeBytes,
+		UploadedBy:        img.UploadedBy,
+		FromPublicService: img.FromPublicService,
+		ServiceName:       img.ServiceName,
+		Visibility:        imageVisibility(img.FromPublicService),
+		CreatedAt:         img.CreatedAt,
+		DeletedAt:         img.DeletedAt,
 	}
+}
+
+func imageVisibility(fromPublicService bool) string {
+	if fromPublicService {
+		return store.VisibilityPublic
+	}
+	return store.VisibilityPrivate
 }
 
 func imagesToDTO(images []store.Image) []imageDTO {
@@ -417,6 +550,21 @@ func visibilityPolicy(c *gin.Context) (*store.VisibilityPolicy, error) {
 	return store.CompileVisibility(cfg)
 }
 
+// imageRequestPolicy layers request filters on top of the admin-managed rules.
+// It is used by the public image listings/rankings and defaults to the
+// admin-configured public/private mode when the request omits visibility.
+func imageRequestPolicy(c *gin.Context) (*store.VisibilityPolicy, error) {
+	cfg, err := sStore(c).GetAppConfig(c.Request.Context())
+	if err != nil {
+		return nil, err
+	}
+	req, err := imageRequestFromQuery(c)
+	if err != nil {
+		return nil, err
+	}
+	return store.CompileImageRequest(cfg, req)
+}
+
 func moderationRows(c *gin.Context) ([]store.ImageModeration, error) {
 	return sStore(c).ListImageModeration(c.Request.Context())
 }
@@ -432,7 +580,7 @@ func asStoreError(c *gin.Context, err error) {
 	case errors.Is(err, store.ErrConflict):
 		conflict(c, "That name is already taken.")
 	case errors.Is(err, store.ErrInvalidFilter):
-		badRequest(c, "Invalid filter, check the title regex.")
+		badRequest(c, "Invalid filter. Check visibility, service, uploader and regex filters.")
 	default:
 		serverError(c, err)
 	}

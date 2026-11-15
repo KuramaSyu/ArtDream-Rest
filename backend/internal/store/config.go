@@ -8,21 +8,23 @@ import (
 )
 
 const (
-	configKeyRankingAnonymized = "ranking_anonymized"
-	configKeyExcludeAuthors    = "rank_filter_exclude_authors"
-	configKeyExcludeTitles     = "rank_filter_exclude_titles"
-	configKeyIncludeAuthors    = "rank_filter_include_authors"
-	configKeyIncludeTitles     = "rank_filter_include_titles"
+	configKeyRankingAnonymized      = "ranking_anonymized"
+	configKeyDefaultImageVisibility = "default_image_visibility"
+	configKeyExcludeAuthors         = "rank_filter_exclude_authors"
+	configKeyExcludeTitles          = "rank_filter_exclude_titles"
+	configKeyIncludeAuthors         = "rank_filter_include_authors"
+	configKeyIncludeTitles          = "rank_filter_include_titles"
 )
 
 // GetAppConfig reads the server-side frontend configuration and the pattern
 // allow/deny lists that filter public image and ranking results.
 func (s *Store) GetAppConfig(ctx context.Context) (AppConfig, error) {
 	config := AppConfig{
-		ExcludeAuthors: []string{},
-		ExcludeTitles:  []string{},
-		IncludeAuthors: []string{},
-		IncludeTitles:  []string{},
+		DefaultImageVisibility: "all",
+		ExcludeAuthors:         []string{},
+		ExcludeTitles:          []string{},
+		IncludeAuthors:         []string{},
+		IncludeTitles:          []string{},
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT key, value, updated_at FROM app_config`)
 	if err != nil {
@@ -43,6 +45,10 @@ func (s *Store) GetAppConfig(ctx context.Context) (AppConfig, error) {
 		switch key {
 		case configKeyRankingAnonymized:
 			config.RankingAnonymized = value == "true" || value == "1"
+		case configKeyDefaultImageVisibility:
+			if visibility, err := NormalizeVisibility(value); err == nil {
+				config.DefaultImageVisibility = visibility
+			}
 		case configKeyExcludeAuthors:
 			config.ExcludeAuthors = decodePatternList(value)
 		case configKeyExcludeTitles:
@@ -80,6 +86,16 @@ func (s *Store) SetRankingAnonymized(ctx context.Context, enabled bool) error {
 		value = "true"
 	}
 	return s.setConfigValue(ctx, configKeyRankingAnonymized, value)
+}
+
+// SetDefaultImageVisibility persists the fallback public/private filter for
+// image requests that do not specify their own visibility parameter.
+func (s *Store) SetDefaultImageVisibility(ctx context.Context, visibility string) error {
+	normalized, err := NormalizeVisibility(visibility)
+	if err != nil {
+		return err
+	}
+	return s.setConfigValue(ctx, configKeyDefaultImageVisibility, normalized)
 }
 
 // SetFilterLists persists the four regex pattern lists used to hide images

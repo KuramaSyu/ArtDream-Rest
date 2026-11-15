@@ -2,12 +2,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
   Button,
+  Checkbox,
   Chip,
   CircularProgress,
   Dialog,
+  DialogContent,
+  DialogTitle,
   Divider,
+  FormControlLabel,
   IconButton,
+  MenuItem,
   Slider,
+  TextField,
   Tooltip,
   Typography,
   alpha,
@@ -22,12 +28,19 @@ import {
   EmojiEventsRounded,
   FullscreenRounded,
   SwapHorizRounded,
+  TuneRounded,
   VisibilityOffRounded,
 } from "@mui/icons-material";
 import { AnimatePresence, motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { api, ApiError, imageVariant } from "../api/client";
-import type { ImageItem, VoteMode, VotePayload } from "../api/types";
+import type {
+  ImageItem,
+  ImageRequestFilters,
+  ImageVisibility,
+  VoteMode,
+  VotePayload,
+} from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { EmptyState, LoadingView } from "../components/Loading";
 import { PageShell } from "../components/PageShell";
@@ -38,6 +51,30 @@ import { useFrontendConfig } from "../config/FrontendConfig";
 type Side = "left" | "right";
 
 type SliderHover = { value: number; id: number };
+
+interface RankFiltersDraft {
+  visibility: "" | ImageVisibility;
+  onlyMine: boolean;
+  friends: string;
+  service: string;
+  includeAuthors: string;
+  excludeAuthors: string;
+  includeTitles: string;
+  excludeTitles: string;
+}
+
+function emptyRankFilters(): RankFiltersDraft {
+  return {
+    visibility: "",
+    onlyMine: false,
+    friends: "",
+    service: "",
+    includeAuthors: "",
+    excludeAuthors: "",
+    includeTitles: "",
+    excludeTitles: "",
+  };
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -53,6 +90,43 @@ function verdictText(value: number, left: string, right: string): string {
   return `${strength} ${right}`;
 }
 
+const FIVE_RATE_HINTS = [
+  { key: "1", label: "left" },
+  { key: "2", label: "lean left" },
+  { key: "3", label: "even" },
+  { key: "4", label: "lean right" },
+  { key: "5", label: "right" },
+] as const;
+
+/** Long-slider value previewed while the matching five-point area is hovered. */
+const FIVE_AREA_VALUES = [1, 26, 50, 75, 100] as const;
+
+function Keycap({ children }: { children: string }) {
+  return (
+    <Box
+      component="kbd"
+      sx={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        minWidth: 22,
+        height: 22,
+        px: 0.6,
+        borderRadius: 0.8,
+        border: "1px solid rgba(255,255,255,.2)",
+        background: "rgba(255,255,255,.06)",
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+        fontSize: "0.68rem",
+        lineHeight: 1,
+        color: "text.primary",
+        opacity: 0.82,
+      }}
+    >
+      {children}
+    </Box>
+  );
+}
+
 type DuelSliderProps = {
   leftName: string;
   rightName: string;
@@ -61,6 +135,7 @@ type DuelSliderProps = {
   resetKey: string;
   onValue: (value: number) => void;
   onPick: (side: Side) => void;
+  onRate: (rating: number) => void;
 };
 
 /**
@@ -80,9 +155,11 @@ function DuelSlider({
   resetKey,
   onValue,
   onPick,
+  onRate,
 }: DuelSliderProps) {
   const theme = useTheme();
   const [value, setValue] = useState(50);
+  const [zone, setZone] = useState<number | null>(null);
   const valueRef = useRef(50);
   const goalRef = useRef(50);
   const animation = useRef<number | null>(null);
@@ -102,6 +179,31 @@ function DuelSlider({
     setValue(next);
   }, []);
 
+  /** Glide toward a goal, keeping velocity when the goal changes mid-flight. */
+  const glideTo = useCallback(
+    (goal: number) => {
+      goalRef.current = goal;
+      if (animation.current !== null) return;
+      let last = performance.now();
+      const step = (now: number) => {
+        const dt = Math.min(64, Math.max(0, now - last));
+        last = now;
+        const current = valueRef.current;
+        const target = goalRef.current;
+        const next = current + (target - current) * (1 - Math.exp(-dt / 70));
+        if (Math.abs(target - next) < 0.4) {
+          commit(target);
+          animation.current = null;
+          return;
+        }
+        commit(next);
+        animation.current = requestAnimationFrame(step);
+      };
+      animation.current = requestAnimationFrame(step);
+    },
+    [commit],
+  );
+
   useEffect(() => () => stop(), [stop]);
 
   // Every new pair starts from the middle.
@@ -111,31 +213,17 @@ function DuelSlider({
     valueRef.current = 50;
     onValueRef.current(50);
     setValue(50);
+    setZone(null);
   }, [resetKey, stop]);
 
   useEffect(() => {
     if (!hover) return;
-    goalRef.current = hover.value;
-    if (animation.current !== null) return;
-    let last = performance.now();
-    const step = (now: number) => {
-      const dt = Math.min(64, Math.max(0, now - last));
-      last = now;
-      const current = valueRef.current;
-      const goal = goalRef.current;
-      const next = current + (goal - current) * (1 - Math.exp(-dt / 70));
-      if (Math.abs(goal - next) < 0.4) {
-        commit(goal);
-        animation.current = null;
-        return;
-      }
-      commit(next);
-      animation.current = requestAnimationFrame(step);
-    };
-    animation.current = requestAnimationFrame(step);
-  }, [hover, resetKey, commit]);
+    setZone(null);
+    glideTo(hover.value);
+  }, [hover, glideTo]);
 
   const verdict = verdictText(value, leftName, rightName);
+  const activeZone = zone;
 
   return (
     <>
@@ -166,7 +254,9 @@ function DuelSlider({
             {verdict}
           </Typography>
           <Typography sx={{ fontSize: "0.68rem", letterSpacing: "0.14em", opacity: 0.55 }}>
-            {Math.round(value)}/100
+            {activeZone !== null
+              ? `${activeZone}/5 — ${FIVE_RATE_HINTS[activeZone - 1].label}`
+              : `${Math.round(value)}/100`}
           </Typography>
         </Box>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}>
@@ -184,12 +274,119 @@ function DuelSlider({
         </Box>
       </Box>
 
+      <Box
+        aria-label="Five quick verdict areas"
+        sx={{
+          display: "grid",
+          gridTemplateColumns: { xs: "minmax(0, 1fr)", md: "repeat(5, minmax(0, 1fr))" },
+          gap: 1,
+          mt: 1.4,
+          mb: 1.6,
+          opacity: disabled ? 0.55 : 1,
+          transition: "opacity 180ms ease",
+        }}
+        onMouseLeave={() => setZone(null)}
+      >
+        {FIVE_RATE_HINTS.map((hint, index) => {
+          const rating = index + 1;
+          const active = activeZone === rating;
+          const tint =
+            rating < 3
+              ? theme.palette.primary.main
+              : rating > 3
+                ? theme.palette.secondary.main
+                : theme.palette.text.primary;
+          return (
+            <Box
+              key={hint.key}
+              role="button"
+              tabIndex={disabled ? -1 : 0}
+              aria-disabled={disabled}
+              aria-label={`Rate ${rating} of 5, ${hint.label}`}
+              onMouseEnter={() => {
+                if (disabled) return;
+                setZone(rating);
+                glideTo(FIVE_AREA_VALUES[index]);
+              }}
+              onFocus={() => {
+                if (disabled) return;
+                setZone(rating);
+                glideTo(FIVE_AREA_VALUES[index]);
+              }}
+              onBlur={() => setZone((current) => (current === rating ? null : current))}
+              onClick={() => {
+                if (!disabled) onRate(rating);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  if (!disabled) onRate(rating);
+                }
+              }}
+              sx={{
+                position: "relative",
+                display: "flex",
+                flexDirection: { xs: "row", md: "column" },
+                alignItems: "center",
+                justifyContent: "center",
+                gap: { xs: 1.2, md: 0.5 },
+                minHeight: { xs: 52, md: 86 },
+                px: 1.5,
+                borderRadius: 3,
+                cursor: disabled ? "default" : "pointer",
+                outline: "none",
+                background: active
+                  ? `linear-gradient(135deg, ${alpha(tint, 0.3)}, ${alpha(tint, 0.1)})`
+                  : "rgba(255,255,255,.035)",
+                border: active
+                  ? `1.5px solid ${alpha(tint, 0.85)}`
+                  : "1.5px solid rgba(255,255,255,.09)",
+                boxShadow: active ? `0 14px 38px ${alpha(tint, 0.28)}` : "none",
+                transform: active ? "translateY(-2px)" : "none",
+                transition:
+                  "background 180ms ease, border-color 180ms ease, transform 180ms ease, box-shadow 180ms ease",
+                "&:focus-visible": {
+                  boxShadow: `0 0 0 2px ${alpha(tint, 0.9)}`,
+                },
+              }}
+            >
+              <Box
+                component="span"
+                sx={{
+                  fontSize: { xs: "1.2rem", md: "1.7rem" },
+                  fontWeight: 700,
+                  lineHeight: 1,
+                  color: active ? tint : "text.primary",
+                  opacity: active ? 1 : 0.9,
+                }}
+              >
+                {rating}
+              </Box>
+              <Box
+                component="span"
+                sx={{
+                  fontSize: "0.6rem",
+                  letterSpacing: "0.12em",
+                  textTransform: "uppercase",
+                  color: "text.secondary",
+                  opacity: active ? 0.95 : 0.6,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {hint.label}
+              </Box>
+            </Box>
+          );
+        })}
+      </Box>
+
       <Box sx={{ px: 0.5, pt: 0.6 }}>
         <Slider
           className="slider-track-gradient"
           value={value}
           onChange={(_event, next) => {
             stop();
+            setZone(null);
             const numeric = next as number;
             goalRef.current = numeric;
             commit(numeric);
@@ -220,6 +417,60 @@ function DuelSlider({
           <span>even</span>
           <span>right feels better</span>
         </Box>
+
+        <Box
+          aria-label="Keyboard shortcuts"
+          sx={{
+            display: { xs: "none", md: "flex" },
+            flexWrap: "wrap",
+            alignItems: "center",
+            columnGap: 1.4,
+            rowGap: 1,
+            mt: 1.7,
+          }}
+        >
+          <Box sx={{ display: "flex", alignItems: "flex-end", gap: 0.9 }}>
+            {FIVE_RATE_HINTS.map((hint) => (
+              <Box
+                key={hint.key}
+                sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0.35 }}
+              >
+                <Keycap>{hint.key}</Keycap>
+                <Box
+                  sx={{
+                    fontSize: "0.6rem",
+                    letterSpacing: "0.05em",
+                    textTransform: "uppercase",
+                    color: "text.secondary",
+                    opacity: 0.65,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {hint.label}
+                </Box>
+              </Box>
+            ))}
+          </Box>
+
+          <Divider orientation="vertical" flexItem sx={{ opacity: 0.2, alignSelf: "stretch" }} />
+
+          <Box sx={{ display: "flex", alignItems: "center", gap: 0.6 }}>
+            <Keycap>←</Keycap>
+            <Keycap>→</Keycap>
+            <Typography sx={{ fontSize: "0.7rem", color: "text.secondary", opacity: 0.8 }}>
+              soft pick
+            </Typography>
+          </Box>
+
+          <Divider orientation="vertical" flexItem sx={{ opacity: 0.2, alignSelf: "stretch" }} />
+
+          <Box sx={{ display: "flex", alignItems: "center", gap: 0.6 }}>
+            <Keycap>Enter</Keycap>
+            <Typography sx={{ fontSize: "0.7rem", color: "text.secondary", opacity: 0.8 }}>
+              send slider
+            </Typography>
+          </Box>
+        </Box>
       </Box>
     </>
   );
@@ -245,6 +496,37 @@ export function RankPage() {
   const [reloadTick, setReloadTick] = useState(0);
   const [fullscreen, setFullscreen] = useState<ImageItem | null>(null);
   const [fullscreenLoaded, setFullscreenLoaded] = useState(false);
+  const [rankFilters, setRankFilters] = useState<RankFiltersDraft>(emptyRankFilters);
+  const [rankFiltersDraft, setRankFiltersDraft] = useState<RankFiltersDraft>(emptyRankFilters);
+  const [rankFiltersOpen, setRankFiltersOpen] = useState(false);
+
+  const requestFilters = useMemo<ImageRequestFilters>(
+    () => ({
+      visibility: rankFilters.visibility || undefined,
+      mine: rankFilters.onlyMine && Boolean(user) || undefined,
+      uploadedBy: rankFilters.friends.trim() || undefined,
+      service: rankFilters.service.trim() || undefined,
+      includeAuthors: rankFilters.includeAuthors.trim() || undefined,
+      excludeAuthors: rankFilters.excludeAuthors.trim() || undefined,
+      includeTitles: rankFilters.includeTitles.trim() || undefined,
+      excludeTitles: rankFilters.excludeTitles.trim() || undefined,
+    }),
+    [rankFilters, user],
+  );
+  const filtersActive = useMemo(
+    () =>
+      Boolean(
+        rankFilters.visibility ||
+          rankFilters.onlyMine ||
+          rankFilters.friends.trim() ||
+          rankFilters.service.trim() ||
+          rankFilters.includeAuthors.trim() ||
+          rankFilters.excludeAuthors.trim() ||
+          rankFilters.includeTitles.trim() ||
+          rankFilters.excludeTitles.trim(),
+      ),
+    [rankFilters],
+  );
 
   const recent = useRef<string[]>([]);
   const startedAt = useRef(Date.now());
@@ -313,9 +595,9 @@ export function RankPage() {
     setLoading(true);
     setError("");
     try {
-      let items = await api.randomImages(2, exclude);
+      let items = await api.randomImages(2, exclude, undefined, requestFilters);
       if (items.length < 2 && exclude.length > 0) {
-        items = await api.randomImages(2);
+        items = await api.randomImages(2, [], undefined, requestFilters);
       }
       setPair(items);
       setPicked(null);
@@ -336,7 +618,7 @@ export function RankPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [requestFilters]);
 
   useEffect(() => {
     void loadPair(recent.current);
@@ -360,11 +642,22 @@ export function RankPage() {
         const mid = ((payload.minValue ?? 0) + (payload.maxValue ?? 0)) / 2;
         const isTie =
           payload.value === undefined || Math.abs(payload.value - mid) < 1;
+        const fiveSpan = fiveMode.maxValue - fiveMode.minValue;
+        const fiveRelative =
+          payload.mode === fiveMode.name && payload.value !== undefined && fiveSpan > 0
+            ? (payload.value - fiveMode.minValue) / fiveSpan
+            : null;
         notify(
           isTie
             ? "A draw. Both keep their dignity."
-            : payload.mode === fiveMode.name
-              ? `${payload.value === fiveMode.minValue + (fiveMode.maxValue - fiveMode.minValue) * 0.25 ? "Left" : "Right"} got a gentle nod.`
+            : fiveRelative !== null
+              ? fiveRelative < 0.01
+                ? "Left, unmistakably."
+                : fiveRelative < 0.5
+                  ? "Left got a gentle nod."
+                  : fiveRelative > 0.99
+                    ? "Right, unmistakably."
+                    : "Right got a gentle nod."
               : "Verdict sealed.",
           "success",
         );
@@ -400,6 +693,20 @@ export function RankPage() {
     });
   };
 
+  const rateFive = (rating: number) => {
+    if (voting || pair.length < 2) return;
+    const span = fiveMode.maxValue - fiveMode.minValue;
+    const value = Math.round(fiveMode.minValue + ((rating - 1) / 4) * span);
+    setPicked(rating === 3 ? null : rating < 3 ? "left" : "right");
+    void submitVote({
+      mode: fiveMode.name,
+      value,
+      minValue: fiveMode.minValue,
+      maxValue: fiveMode.maxValue,
+      metadata: { ui: "keyboard-five", rating },
+    });
+  };
+
   const submitSlider = () => {
     void submitVote({
       mode: hundredMode.name,
@@ -412,13 +719,22 @@ export function RankPage() {
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
+      if (rankFiltersOpen) return;
+      if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
       const target = event.target as HTMLElement | null;
-      // Never steal keys from form controls, the slider, links or buttons.
+      // Never steal keys from text controls, selects, or the slider itself.
       if (
         target?.isContentEditable ||
         target?.closest(
-          'input, textarea, select, button, a, [role="slider"], [role="button"], .MuiSlider-root',
+          'input, textarea, select, [role="combobox"], [role="listbox"], [role="slider"], .MuiSlider-root',
         )
+      ) {
+        return;
+      }
+      // Let a focused button/link handle Enter itself.
+      if (
+        event.key === "Enter" &&
+        target?.closest('button, a, [role="button"]')
       ) {
         return;
       }
@@ -428,6 +744,9 @@ export function RankPage() {
       } else if (event.key === "ArrowRight") {
         event.preventDefault();
         pick("right");
+      } else if (event.key >= "1" && event.key <= "5") {
+        event.preventDefault();
+        rateFive(Number(event.key));
       } else if (event.key === "Enter") {
         event.preventDefault();
         submitSlider();
@@ -491,12 +810,17 @@ export function RankPage() {
               sx={{ background: "rgba(255,255,255,.08)", opacity: 0.8 }}
             />
           )}
-          <Chip
+          <Button
             size="small"
-            icon={<AutoAwesomeRounded sx={{ fontSize: 16 }} />}
-            label="left / right keys"
-            sx={{ background: "rgba(255,255,255,.08)", opacity: 0.8 }}
-          />
+            startIcon={<TuneRounded />}
+            onClick={() => {
+              setRankFiltersDraft({ ...rankFilters });
+              setRankFiltersOpen(true);
+            }}
+            sx={{ textTransform: "none", fontWeight: 600 }}
+          >
+            Source{filtersActive ? " ✓" : ""}
+          </Button>
           <Button
             size="small"
             startIcon={<SwapHorizRounded />}
@@ -747,6 +1071,7 @@ export function RankPage() {
               resetKey={`${left?.id ?? ""}-${right?.id ?? ""}`}
               onValue={handleSliderValue}
               onPick={pick}
+              onRate={rateFive}
             />
 
             <Divider sx={{ my: 2, opacity: 0.4 }} />
@@ -760,9 +1085,19 @@ export function RankPage() {
                 gap: 1.5,
               }}
             >
-              <Typography variant="body2" color="text.secondary" sx={{ opacity: 0.8 }}>
-                Hover an image to nudge the slider, tap for a soft 2/5 or 4/5, or slide
-                for the whole story.
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ display: { xs: "block", md: "none" }, opacity: 0.8 }}
+              >
+                Tap an image for a soft 2/5 or 4/5, tap an area for 1–5, or slide for the whole story.
+              </Typography>
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ display: { xs: "none", md: "block" }, opacity: 0.8 }}
+              >
+                Hover an image to nudge the slider, pick one of the five areas, or slide for the whole story.
               </Typography>
               <Button
                 variant="contained"
@@ -787,7 +1122,7 @@ export function RankPage() {
                   transition: "transform 200ms ease",
                 }}
               >
-                Seal the verdict
+                send
               </Button>
             </Box>
           </Box>
@@ -891,6 +1226,141 @@ export function RankPage() {
           )}
         </Box>
       </Dialog>
+      <Dialog
+        open={rankFiltersOpen}
+        onClose={() => setRankFiltersOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle
+          sx={{ fontFamily: "var(--ad-font-display)", fontWeight: 650, fontSize: "1.6rem" }}
+        >
+          Choose your pair source
+        </DialogTitle>
+        <Divider />
+        <DialogContent sx={{ pt: 2 }}>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Leave everything on default to follow the admin setting. Pick private and “only mine”
+            for a duel of your own work, or add friend usernames/ids for a private circle.
+          </Typography>
+          <Box sx={{ display: "grid", gap: 1.6, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
+            <TextField
+              select
+              size="small"
+              label="Visibility"
+              value={rankFiltersDraft.visibility}
+              onChange={(event) =>
+                setRankFiltersDraft({
+                  ...rankFiltersDraft,
+                  visibility: event.target.value as "" | ImageVisibility,
+                })
+              }
+            >
+              <MenuItem value="">Admin default{frontendConfig.defaultImageVisibility === "all" ? "" : ` (${frontendConfig.defaultImageVisibility})`}</MenuItem>
+              <MenuItem value="all">All images</MenuItem>
+              <MenuItem value="public">Public service only</MenuItem>
+              <MenuItem value="private">Private only</MenuItem>
+            </TextField>
+            <TextField
+              size="small"
+              label="Service contains"
+              value={rankFiltersDraft.service}
+              onChange={(event) =>
+                setRankFiltersDraft({ ...rankFiltersDraft, service: event.target.value })
+              }
+              placeholder="Instagram, DeviantArt…"
+            />
+            <TextField
+              size="small"
+              label="Friends / uploaders"
+              value={rankFiltersDraft.friends}
+              onChange={(event) =>
+                setRankFiltersDraft({ ...rankFiltersDraft, friends: event.target.value })
+              }
+              placeholder="@names or account ids, comma separated"
+              helperText="Account usernames or numeric ids. Combine with “only mine”."
+              sx={{ gridColumn: { sm: "1 / -1" } }}
+            />
+            <TextField
+              size="small"
+              label="Include authors (regex)"
+              value={rankFiltersDraft.includeAuthors}
+              onChange={(event) =>
+                setRankFiltersDraft({ ...rankFiltersDraft, includeAuthors: event.target.value })
+              }
+              placeholder="ada|bob"
+              helperText="Comma separated. Images must match at least one."
+            />
+            <TextField
+              size="small"
+              label="Exclude authors (regex)"
+              value={rankFiltersDraft.excludeAuthors}
+              onChange={(event) =>
+                setRankFiltersDraft({ ...rankFiltersDraft, excludeAuthors: event.target.value })
+              }
+              placeholder="spam.*"
+              helperText="Comma separated blacklist."
+            />
+            <TextField
+              size="small"
+              label="Include titles (regex)"
+              value={rankFiltersDraft.includeTitles}
+              onChange={(event) =>
+                setRankFiltersDraft({ ...rankFiltersDraft, includeTitles: event.target.value })
+              }
+              placeholder="sunset|sea"
+            />
+            <TextField
+              size="small"
+              label="Exclude titles (regex)"
+              value={rankFiltersDraft.excludeTitles}
+              onChange={(event) =>
+                setRankFiltersDraft({ ...rankFiltersDraft, excludeTitles: event.target.value })
+              }
+              placeholder="advert"
+            />
+          </Box>
+          <FormControlLabel
+            sx={{ mt: 1.4 }}
+            control={
+              <Checkbox
+                checked={rankFiltersDraft.onlyMine}
+                onChange={(event) =>
+                  setRankFiltersDraft({ ...rankFiltersDraft, onlyMine: event.target.checked })
+                }
+                disabled={!user}
+              />
+            }
+            label={user ? `Only my uploads (@${user.username})` : "Only my uploads (sign in first)"}
+          />
+        </DialogContent>
+        <Divider />
+        <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1, p: 2 }}>
+          <Button
+            onClick={() => {
+              setRankFiltersDraft(emptyRankFilters());
+              setRankFilters(emptyRankFilters());
+              setRankFiltersOpen(false);
+              setReloadTick((tick) => tick + 1);
+            }}
+            sx={{ textTransform: "none" }}
+          >
+            Reset
+          </Button>
+          <Button
+            variant="contained"
+            onClick={() => {
+              setRankFilters(rankFiltersDraft);
+              setRankFiltersOpen(false);
+              setReloadTick((tick) => tick + 1);
+            }}
+            sx={{ borderRadius: 99, textTransform: "none" }}
+          >
+            Apply source
+          </Button>
+        </Box>
+      </Dialog>
+
     </PageShell>
   );
 }

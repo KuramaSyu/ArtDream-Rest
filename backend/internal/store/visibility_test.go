@@ -75,3 +75,100 @@ func TestModerationFor(t *testing.T) {
 		t.Errorf("expected no moderation for an unknown image")
 	}
 }
+
+func TestCompileImageRequestVisibilityAndUploader(t *testing.T) {
+	cfg := AppConfig{DefaultImageVisibility: VisibilityAll}
+	policy, err := CompileImageRequest(cfg, ImageRequest{
+		Visibility: VisibilityPublic,
+		UploadedBy: []int64{7, 9},
+	})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	uid7, uid9, uid12 := int64(7), int64(9), int64(12)
+	cases := []struct {
+		name string
+		img  Image
+		want bool
+	}{
+		{"public owned", Image{FromPublicService: true, UploadedBy: &uid7}, false},
+		{"public friend", Image{FromPublicService: true, UploadedBy: &uid9}, false},
+		{"private owned", Image{FromPublicService: false, UploadedBy: &uid7}, true},
+		{"public stranger", Image{FromPublicService: true, UploadedBy: &uid12}, true},
+		{"public anonymous", Image{FromPublicService: true}, true},
+	}
+	for _, tc := range cases {
+		if got := policy.Hidden(&tc.img); got != tc.want {
+			t.Errorf("%s: Hidden = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestCompileImageRequestUsesAdminDefault(t *testing.T) {
+	policy, err := CompileImageRequest(AppConfig{DefaultImageVisibility: VisibilityPrivate}, ImageRequest{})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if policy.Hidden(&Image{FromPublicService: false}) {
+		t.Errorf("private default should keep private images")
+	}
+	if !policy.Hidden(&Image{FromPublicService: true}) {
+		t.Errorf("private default should hide public-service images")
+	}
+}
+
+func TestCompileImageRequestLayeredListsAndService(t *testing.T) {
+	cfg := AppConfig{
+		IncludeAuthors: []string{"ada|bob"},
+		ExcludeTitles:  []string{"spam"},
+	}
+	policy, err := CompileImageRequest(cfg, ImageRequest{
+		Service:        "instagram",
+		IncludeTitles:  []string{"sunset|sea"},
+		ExcludeAuthors: []string{"bot"},
+	})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	cases := []struct {
+		name string
+		img  Image
+		want bool
+	}{
+		{"matches all", Image{Author: "Ada", Title: "Sunset", ServiceName: "Instagram"}, false},
+		{"global title deny", Image{Author: "Ada", Title: "Spam sunset", ServiceName: "Instagram"}, true},
+		{"request title allow fails", Image{Author: "Ada", Title: "Portrait", ServiceName: "Instagram"}, true},
+		{"request author deny", Image{Author: "Bot", Title: "Sunset", ServiceName: "Instagram"}, true},
+		{"wrong service", Image{Author: "Bob", Title: "Sea", ServiceName: "Flickr"}, true},
+		{"empty service", Image{Author: "Bob", Title: "Sea"}, true},
+	}
+	for _, tc := range cases {
+		if got := policy.Hidden(&tc.img); got != tc.want {
+			t.Errorf("%s: Hidden = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestSQLFilter(t *testing.T) {
+	policy, err := CompileImageRequest(AppConfig{}, ImageRequest{
+		Visibility: VisibilityPublic,
+		Service:    "Art",
+		UploadedBy: []int64{9, 3},
+	})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	where, args := policy.SQLFilter("images")
+	if where == "" {
+		t.Fatal("expected SQL filter")
+	}
+	if len(args) != 3 {
+		t.Fatalf("args = %v, want 3", args)
+	}
+	if args[0] != "%art%" {
+		t.Errorf("service arg = %v", args[0])
+	}
+	if args[1] != int64(3) || args[2] != int64(9) {
+		t.Errorf("uploader ids should be sorted, got %v", args[1:])
+	}
+}

@@ -115,6 +115,9 @@ The artist name is independent from the account username.
   attach those submissions to the account (`POST /images/claim`). Claim tokens
   are cleared once used, so knowing a public image id is not enough to claim it.
 - The artist name and title chosen at upload time never change when claiming.
+- Every upload carries a **private by default** flag. Uploaders can mark an
+  image as coming from a public service and optionally name that service
+  (`fromPublicService`, `serviceName`). No flag means a private image.
 
 ## Ranking model
 
@@ -164,6 +167,31 @@ Admins can shape public results without deleting anything:
   public rankings, random pairs, author listings and direct vote attempts;
   they never delete rows or files.
 
+### Public/private provenance & request filters
+
+Every image has `fromPublicService` (default `false`) and an optional
+`serviceName`. Private is the default for uploads. The admin panel stores a
+global `defaultImageVisibility` (`all`, `public` or `private`) that applies to
+image requests which do not send their own `visibility` parameter.
+
+The public image listing, random-pair and ranking endpoints accept the same
+request-level filters (they are layered on top of the admin regex lists):
+
+- `visibility=all|public|private` — override the admin default for this request.
+- `service=<text>` — case-insensitive substring of the service name.
+- `uploadedBy=<account ids/usernames>` and/or `mine=true` — restrict results to
+  your own uploads or a hand-picked group of friends. `uploadedBy=me` is
+  accepted too. Requires a session for `me`/`mine`.
+- `includeAuthors`, `excludeAuthors`, `includeTitles`, `excludeTitles` — extra
+  regex allow/deny lists. Every non-empty include list must match; every
+  exclude match hides the image. Lists are comma separated (or repeated query
+  parameters).
+
+This makes it possible to ask for e.g. only your private work, only public
+Instagram pieces, or pairs from you and a few friends while the global admin
+rules still apply. Direct image bytes/meta requests stay addressable by id so
+shared links and the admin UI keep working.
+
 ## API overview
 
 All routes are under `/api/v1`. Responses are JSON except image bytes.
@@ -174,14 +202,20 @@ All routes are under `/api/v1`. Responses are JSON except image bytes.
 | --- | --- | --- |
 | GET | `/health` | Liveness |
 | GET | `/config` | `{needsBootstrap, userCount}` |
-| GET | `/frontend-config` | Server-backed frontend display config, e.g. `{rankingAnonymized}` |
-| GET | `/images/random?amount=2&author=&exclude=id,id` | Bare array of images |
-| GET | `/images/author?author=Ada&amount=&offset=` | `{items, total, author}` |
+| GET | `/frontend-config` | Server-backed display config, e.g. `{rankingAnonymized, defaultImageVisibility}` |
+| GET | `/images/random?amount=2&author=&exclude=id,id` | Bare array of images. Also accepts the request filters below |
+| GET | `/images/author?author=Ada&amount=&offset=` | `{items, total, author}`; `author` may be empty when `uploadedBy`/`mine` is used |
 | GET | `/images/rank?time=day&amount=10&offset=0` | Ranked winners; also `seconds`, `from`, `to`, `author`, `titleRegex`, `mode` |
 | GET | `/images/:id?format=webp|png|jpg&w=&h=&quality=&download=true&original=true` | Image bytes; default WebP capped to 1920px long edge / 1080p. `original=true` opts into the pristine upload |
 | GET | `/images/:id/meta` | Image metadata |
 | GET | `/rank/modes` | Available vote modes |
-| POST | `/images` | Multipart upload (`image`, `author`, optional `title`). Auth optional. Landscape only. |
+| POST | `/images` | Multipart upload (`image`, `author`, optional `title`, `fromPublicService`, `serviceName`). Auth optional. Landscape only. |
+
+Image request filters (available on `/images/random`, `/images/author` and
+`/images/rank`): `visibility=all|public|private`, `service`, `uploadedBy` (comma
+separated ids/usernames/`me`), `mine=true`, and `includeAuthors`,
+`excludeAuthors`, `includeTitles`, `excludeTitles` regex lists. They are added
+on top of the global admin rules; direct `/images/:id` bytes are not filtered.
 
 Image render example:
 
@@ -265,14 +299,14 @@ Vote request (flexible key spellings are accepted — `leftImageId`, `left-img`,
 | PATCH | `/admin/rank/filters` | Replace any of `excludeAuthors`, `excludeTitles`, `includeAuthors`, `includeTitles` (validated regex arrays) |
 | PATCH | `/admin/images/:id/moderation` | Upsert hide/derank: `{timeWindow, hidden?, deranked?, note?}` |
 | DELETE | `/admin/images/:id/moderation?timeWindow=day` | Remove one period override |
-| GET | `/admin/images` | Filters: `author`, `titleRegex`, `amount`, `offset` |
-| PATCH | `/admin/images/:id` | Change author/title |
+| GET | `/admin/images` | Filters: `author`, `titleRegex`, `visibility`, `service`, `uploadedBy`/`mine`, `includeDeleted`, `amount`, `offset` |
+| PATCH | `/admin/images/:id` | Change `author`, `title`, `fromPublicService`, `serviceName` |
 | DELETE | `/admin/images/:id` | Delete image; `keepVotes=true` preserves votes |
 | DELETE | `/admin/images` | Bulk delete by `ids` or filters; `keepVotes=true` optional |
 | POST | `/admin/rank/modes` | Create mode |
 | PATCH | `/admin/rank/modes/:id` | Update mode |
 | DELETE | `/admin/rank/modes/:id` | Delete mode (blocked while votes use it) |
-| PATCH | `/admin/frontend-config` | `{rankingAnonymized: true|false}` — global ranking author masking |
+| PATCH | `/admin/frontend-config` | `{rankingAnonymized, defaultImageVisibility}` — global ranking author masking and the fallback public/private image-request mode |
 
 Admin filter example — delete all votes from the last week for author “Ada”
 with titles matching `/green/i`:
@@ -285,18 +319,27 @@ curl -X DELETE \
 
 ## Frontend notes
 
-- **Landing:** winners for the chosen period (day by default) drift behind a
-  minimal hero at 1080p. A dim period switcher lives in the bottom-right corner
-  next to a small backdrop-resolution menu (720p / 1080p / 1440p / original).
-  With no votes yet it falls back to random images.
+- **Landing:** winners for the chosen period (day by default) slowly zoom
+  behind a minimal hero at 1080p. The slideshow advances every 6.5 seconds; a
+  thin progress bar along the bottom shows time until the next artwork, and
+  previous/next arrows in the attribution card (plus the left/right arrow
+  keys) jump between results. A dim period switcher lives in the bottom-right
+  corner next to a small backdrop-resolution menu (720p / 1080p / 1440p /
+  original). With no votes yet it falls back to random images.
 - **Rank:** two images shown at 720p, with a fullscreen button for a larger
   view. Click one for a gentle 2/5 or 4/5 vote, hover to nudge the long slider,
-  or drag the 1–100 slider yourself. Arrow keys vote when nothing interactive
-  is focused; Enter submits the slider. `Skip pair` avoids the current pair.
+  or drag the 1–100 slider yourself. On desktop, keyboard hints are shown below
+  the slider: `1`–`5` submit the five-point scale (1 clearly left, 3 even,
+  5 clearly right), arrow keys make a soft left/right pick, and Enter submits
+  the slider. Those hints are hidden on mobile, which keeps the tap-and-slide
+  instructions. `Skip pair` avoids the current pair. The **Source** button
+  opens request filters for public/private provenance, service name, uploader
+  usernames/ids, and extra author/title allow/deny regexes.
 - **Admin:** ranking (exact numbers for any period, per-period hide/derank,
   score rank vs displayed rank), votes (filters, edit, delete, bulk delete),
   images (edit, delete, bulk delete), people (create, edit, grant/revoke admin,
-  delete), visibility rules (four regex lists), and vote-mode management. The
+  delete), visibility rules (four regex lists plus the default public/private
+  image-request mode), and vote-mode management. The
   header has a global
   **Anonymize ranking / Reveal ranking authors** button. It writes the
   server-backed frontend config (`PATCH /admin/frontend-config`), so every
@@ -313,8 +356,9 @@ curl -X DELETE \
 - **Submit:** bulk landscape upload (up to 12 files, 30 MiB each), one shared
   artist name, optional per-image titles, anonymous local claim list, and a
   prompt to attach pending submissions after sign-up. Uploads run with three
-  concurrent requests and show per-batch progress. Empty titles are simply
-  omitted — no "Untitled" placeholders anywhere.
+  concurrent requests and show per-batch progress. A public-service switch and
+  optional service name mark provenance (off/private by default). Empty titles
+  are simply omitted — no "Untitled" placeholders anywhere.
   MUI spacing tokens use the standard 0.25rem scale.
 
 ## Development checks

@@ -20,8 +20,10 @@ import (
 )
 
 type updateImageRequest struct {
-	Author *string `json:"author"`
-	Title  *string `json:"title"`
+	Author            *string `json:"author"`
+	Title             *string `json:"title"`
+	FromPublicService *bool   `json:"fromPublicService"`
+	ServiceName       *string `json:"serviceName"`
 }
 
 type uploadResponse struct {
@@ -101,6 +103,15 @@ func (s *Server) uploadImage(c *gin.Context) {
 		return
 	}
 	title := trimTo(c.PostForm("title"), 200)
+	fromPublicService := truthy(firstNonEmpty(
+		c.PostForm("fromPublicService"),
+		c.PostForm("publicService"),
+		c.PostForm("public"),
+	))
+	serviceName := ""
+	if fromPublicService {
+		serviceName = trimTo(c.PostForm("serviceName"), 120)
+	}
 
 	id, err := newImageID()
 	if err != nil {
@@ -120,15 +131,17 @@ func (s *Server) uploadImage(c *gin.Context) {
 	}
 
 	img := &store.Image{
-		ID:               id,
-		Author:           author,
-		Title:            title,
-		OriginalFilename: fileHeader.Filename,
-		StoragePath:      dest,
-		MimeType:         mime,
-		Width:            cfg.Width,
-		Height:           cfg.Height,
-		SizeBytes:        int64(len(data)),
+		ID:                id,
+		Author:            author,
+		Title:             title,
+		OriginalFilename:  fileHeader.Filename,
+		StoragePath:       dest,
+		MimeType:          mime,
+		Width:             cfg.Width,
+		Height:            cfg.Height,
+		SizeBytes:         int64(len(data)),
+		FromPublicService: fromPublicService,
+		ServiceName:       serviceName,
 	}
 	claimToken := ""
 	if user != nil {
@@ -232,11 +245,21 @@ func firstNonEmpty(values ...string) string {
 
 func (s *Server) imagesByAuthor(c *gin.Context) {
 	author := trimTo(c.Query("author"), 120)
-	if author == "" {
-		badRequest(c, "Provide an author, e.g. /images/author?author=Ada.")
+	req, err := imageRequestFromQuery(c)
+	if err != nil {
+		badRequest(c, err.Error())
 		return
 	}
-	policy, err := visibilityPolicy(c)
+	if author == "" && len(req.UploadedBy) == 0 {
+		badRequest(c, "Provide an author, or use uploadedBy/mine to list uploads across artists.")
+		return
+	}
+	cfg, err := s.Store.GetAppConfig(c.Request.Context())
+	if err != nil {
+		serverError(c, err)
+		return
+	}
+	policy, err := store.CompileImageRequest(cfg, req)
 	if err != nil {
 		asStoreError(c, err)
 		return
@@ -257,7 +280,7 @@ func (s *Server) randomImages(c *gin.Context) {
 			exclude = append(exclude, id)
 		}
 	}
-	policy, err := visibilityPolicy(c)
+	policy, err := imageRequestPolicy(c)
 	if err != nil {
 		asStoreError(c, err)
 		return
@@ -408,7 +431,7 @@ func (s *Server) updateImageAdmin(c *gin.Context) {
 	id := c.Param("id")
 	var req updateImageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		badRequest(c, "Provide author and/or title.")
+		badRequest(c, "Provide author, title, fromPublicService and/or serviceName.")
 		return
 	}
 	var author, title *string
@@ -424,11 +447,26 @@ func (s *Server) updateImageAdmin(c *gin.Context) {
 		t := trimTo(*req.Title, 200)
 		title = &t
 	}
-	if author == nil && title == nil {
+	var fromPublicService *bool
+	if req.FromPublicService != nil {
+		v := *req.FromPublicService
+		fromPublicService = &v
+	}
+	var serviceName *string
+	if req.ServiceName != nil {
+		s := trimTo(*req.ServiceName, 120)
+		serviceName = &s
+	}
+	// A private image cannot claim a public service name.
+	if fromPublicService != nil && !*fromPublicService {
+		empty := ""
+		serviceName = &empty
+	}
+	if author == nil && title == nil && fromPublicService == nil && serviceName == nil {
 		badRequest(c, "Nothing to update.")
 		return
 	}
-	if err := s.Store.UpdateImage(c.Request.Context(), id, author, title); err != nil {
+	if err := s.Store.UpdateImage(c.Request.Context(), id, author, title, fromPublicService, serviceName); err != nil {
 		serverError(c, err)
 		return
 	}
