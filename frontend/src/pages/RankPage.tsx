@@ -37,6 +37,8 @@ import { useFrontendConfig } from "../config/FrontendConfig";
 
 type Side = "left" | "right";
 
+type SliderHover = { value: number; id: number };
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -49,6 +51,178 @@ function verdictText(value: number, left: string, right: string): string {
   }
   const strength = value >= 88 ? "clearly" : value >= 68 ? "softly" : "barely";
   return `${strength} ${right}`;
+}
+
+type DuelSliderProps = {
+  leftName: string;
+  rightName: string;
+  disabled: boolean;
+  hover: SliderHover | null;
+  resetKey: string;
+  onValue: (value: number) => void;
+  onPick: (side: Side) => void;
+};
+
+/**
+ * Long slider plus its verdict label. Kept as its own component so the
+ * requestAnimationFrame animation only re-renders this small subtree instead of
+ * the whole duel page (artwork cards included) on every frame.
+ *
+ * Values are fractional while animating: the thumb glides by sub-pixel amounts
+ * instead of stepping across 1% chunks of the track, and exponential smoothing
+ * keeps the velocity continuous when the pointer hops from one image to the other.
+ */
+function DuelSlider({
+  leftName,
+  rightName,
+  disabled,
+  hover,
+  resetKey,
+  onValue,
+  onPick,
+}: DuelSliderProps) {
+  const theme = useTheme();
+  const [value, setValue] = useState(50);
+  const valueRef = useRef(50);
+  const goalRef = useRef(50);
+  const animation = useRef<number | null>(null);
+  const onValueRef = useRef(onValue);
+  onValueRef.current = onValue;
+
+  const stop = useCallback(() => {
+    if (animation.current !== null) {
+      cancelAnimationFrame(animation.current);
+      animation.current = null;
+    }
+  }, []);
+
+  const commit = useCallback((next: number) => {
+    valueRef.current = next;
+    onValueRef.current(next);
+    setValue(next);
+  }, []);
+
+  useEffect(() => () => stop(), [stop]);
+
+  // Every new pair starts from the middle.
+  useEffect(() => {
+    stop();
+    goalRef.current = 50;
+    valueRef.current = 50;
+    onValueRef.current(50);
+    setValue(50);
+  }, [resetKey, stop]);
+
+  useEffect(() => {
+    if (!hover) return;
+    goalRef.current = hover.value;
+    if (animation.current !== null) return;
+    let last = performance.now();
+    const step = (now: number) => {
+      const dt = Math.min(64, Math.max(0, now - last));
+      last = now;
+      const current = valueRef.current;
+      const goal = goalRef.current;
+      const next = current + (goal - current) * (1 - Math.exp(-dt / 70));
+      if (Math.abs(goal - next) < 0.4) {
+        commit(goal);
+        animation.current = null;
+        return;
+      }
+      commit(next);
+      animation.current = requestAnimationFrame(step);
+    };
+    animation.current = requestAnimationFrame(step);
+  }, [hover, resetKey, commit]);
+
+  const verdict = verdictText(value, leftName, rightName);
+
+  return (
+    <>
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 2,
+          mb: 0.4,
+        }}
+      >
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}>
+          <Tooltip title="A tiny nod for the left image">
+            <IconButton size="small" onClick={() => onPick("left")} disabled={disabled}>
+              <ArrowLeftRounded />
+            </IconButton>
+          </Tooltip>
+          <Typography noWrap sx={{ fontSize: "0.85rem", fontWeight: 600, opacity: 0.8 }}>
+            {leftName}
+          </Typography>
+        </Box>
+        <Box sx={{ flexShrink: 0, textAlign: "center" }}>
+          <Typography
+            className="display"
+            sx={{ fontSize: { xs: "1rem", sm: "1.2rem" }, fontWeight: 620 }}
+          >
+            {verdict}
+          </Typography>
+          <Typography sx={{ fontSize: "0.68rem", letterSpacing: "0.14em", opacity: 0.55 }}>
+            {Math.round(value)}/100
+          </Typography>
+        </Box>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}>
+          <Typography
+            noWrap
+            sx={{ fontSize: "0.85rem", fontWeight: 600, opacity: 0.8, textAlign: "right" }}
+          >
+            {rightName}
+          </Typography>
+          <Tooltip title="A tiny nod for the right image">
+            <IconButton size="small" onClick={() => onPick("right")} disabled={disabled}>
+              <ArrowRightRounded />
+            </IconButton>
+          </Tooltip>
+        </Box>
+      </Box>
+
+      <Box sx={{ px: 0.5, pt: 0.6 }}>
+        <Slider
+          className="slider-track-gradient"
+          value={value}
+          onChange={(_event, next) => {
+            stop();
+            const numeric = next as number;
+            goalRef.current = numeric;
+            commit(numeric);
+          }}
+          min={1}
+          max={100}
+          step={1}
+          disabled={disabled}
+          aria-label="How much better is the right image than the left image?"
+          sx={{
+            "--ad-slider-gradient": `linear-gradient(90deg, ${theme.palette.primary.main}, ${theme.palette.secondary.main})`,
+          }}
+        />
+        <Box
+          sx={{
+            display: "flex",
+            justifyContent: "space-between",
+            fontSize: "0.66rem",
+            letterSpacing: "0.1em",
+            textTransform: "uppercase",
+            color: "text.secondary",
+            opacity: 0.7,
+            mt: -0.4,
+            px: 0.5,
+          }}
+        >
+          <span>left feels better</span>
+          <span>even</span>
+          <span>right feels better</span>
+        </Box>
+      </Box>
+    </>
+  );
 }
 
 export function RankPage() {
@@ -65,8 +239,8 @@ export function RankPage() {
   const [loading, setLoading] = useState(true);
   const [voting, setVoting] = useState(false);
   const [error, setError] = useState("");
-  const [slider, setSlider] = useState(50);
   const [picked, setPicked] = useState<Side | null>(null);
+  const [hover, setHover] = useState<SliderHover | null>(null);
   const [castCount, setCastCount] = useState(0);
   const [reloadTick, setReloadTick] = useState(0);
   const [fullscreen, setFullscreen] = useState<ImageItem | null>(null);
@@ -75,43 +249,20 @@ export function RankPage() {
   const recent = useRef<string[]>([]);
   const startedAt = useRef(Date.now());
   const sliderRef = useRef(50);
-  const sliderAnimation = useRef<number | null>(null);
+  const hoverId = useRef(0);
+  const handleSliderValue = useCallback((value: number) => {
+    sliderRef.current = value;
+  }, []);
 
   const pairUrls = useMemo(() => pair.map((item) => item.url), [pair]);
   useStageImages(pairUrls);
 
-  useEffect(() => {
-    sliderRef.current = slider;
-  }, [slider]);
-
-  useEffect(() => {
-    return () => {
-      if (sliderAnimation.current !== null) cancelAnimationFrame(sliderAnimation.current);
-    };
-  }, []);
-
-  /** Smoothly nudge the long slider when the pointer explores an image. */
-  const animateSlider = useCallback((target: number) => {
-    if (sliderAnimation.current !== null) cancelAnimationFrame(sliderAnimation.current);
-    const start = sliderRef.current;
-    if (start === target) return;
-    const started = performance.now();
-    const duration = 240;
-    const step = (now: number) => {
-      const progress = Math.min(1, (now - started) / duration);
-      const eased = 1 - Math.pow(1 - progress, 3);
-      const value = Math.round(start + (target - start) * eased);
-      sliderRef.current = value;
-      setSlider(value);
-      sliderAnimation.current = progress < 1 ? requestAnimationFrame(step) : null;
-    };
-    sliderAnimation.current = requestAnimationFrame(step);
-  }, []);
-
   const handleHover = (side: Side) => {
     if (voting || pair.length < 2) return;
     if (!window.matchMedia("(hover: hover)").matches) return;
-    animateSlider(side === "left" ? 25 : 75);
+    // Hand a fresh target to the slider; it glides there from wherever it is.
+    hoverId.current += 1;
+    setHover({ value: side === "left" ? 25 : 75, id: hoverId.current });
   };
 
   const fiveMode = useMemo(() => {
@@ -168,12 +319,9 @@ export function RankPage() {
       }
       setPair(items);
       setPicked(null);
-      if (sliderAnimation.current !== null) {
-        cancelAnimationFrame(sliderAnimation.current);
-        sliderAnimation.current = null;
-      }
+      hoverId.current += 1;
+      setHover(null);
       sliderRef.current = 50;
-      setSlider(50);
       startedAt.current = Date.now();
       if (items.length < 2) {
         setError("ArtDream needs at least two artworks to start a duel.");
@@ -255,7 +403,7 @@ export function RankPage() {
   const submitSlider = () => {
     void submitVote({
       mode: hundredMode.name,
-      value: slider,
+      value: Math.round(sliderRef.current),
       minValue: 1,
       maxValue: 100,
       metadata: { ui: "long-slider" },
@@ -297,7 +445,6 @@ export function RankPage() {
     left?.title || (!leftAuthorHidden ? left?.author : "") || "left image";
   const rightName =
     right?.title || (!rightAuthorHidden ? right?.author : "") || "right image";
-  const verdict = verdictText(slider, leftName, rightName);
   const fullscreenAuthorHidden = hideAuthors;
 
   return (
@@ -592,89 +739,15 @@ export function RankPage() {
               transition: "opacity 200ms ease",
             }}
           >
-            <Box
-              sx={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 2,
-                mb: 0.4,
-              }}
-            >
-              <Box sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}>
-                <Tooltip title="A tiny nod for the left image">
-                  <IconButton size="small" onClick={() => pick("left")} disabled={voting}>
-                    <ArrowLeftRounded />
-                  </IconButton>
-                </Tooltip>
-                <Typography noWrap sx={{ fontSize: "0.85rem", fontWeight: 600, opacity: 0.8 }}>
-                  {leftName}
-                </Typography>
-              </Box>
-              <Box sx={{ flexShrink: 0, textAlign: "center" }}>
-                <Typography
-                  className="display"
-                  sx={{ fontSize: { xs: "1rem", sm: "1.2rem" }, fontWeight: 620 }}
-                >
-                  {verdict}
-                </Typography>
-                <Typography sx={{ fontSize: "0.68rem", letterSpacing: "0.14em", opacity: 0.55 }}>
-                  {slider}/100
-                </Typography>
-              </Box>
-              <Box sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}>
-                <Typography
-                  noWrap
-                  sx={{ fontSize: "0.85rem", fontWeight: 600, opacity: 0.8, textAlign: "right" }}
-                >
-                  {rightName}
-                </Typography>
-                <Tooltip title="A tiny nod for the right image">
-                  <IconButton size="small" onClick={() => pick("right")} disabled={voting}>
-                    <ArrowRightRounded />
-                  </IconButton>
-                </Tooltip>
-              </Box>
-            </Box>
-
-            <Box sx={{ px: 0.5, pt: 0.6 }}>
-              <Slider
-                className="slider-track-gradient"
-                value={slider}
-                onChange={(_event, value) => {
-                  if (sliderAnimation.current !== null) {
-                    cancelAnimationFrame(sliderAnimation.current);
-                    sliderAnimation.current = null;
-                  }
-                  setSlider(value as number);
-                }}
-                min={1}
-                max={100}
-                step={1}
-                disabled={voting}
-                aria-label="How much better is the right image than the left image?"
-                sx={{
-                  "--ad-slider-gradient": `linear-gradient(90deg, ${theme.palette.primary.main}, ${theme.palette.secondary.main})`,
-                }}
-              />
-              <Box
-                sx={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  fontSize: "0.66rem",
-                  letterSpacing: "0.1em",
-                  textTransform: "uppercase",
-                  color: "text.secondary",
-                  opacity: 0.7,
-                  mt: -0.4,
-                  px: 0.5,
-                }}
-              >
-                <span>left feels better</span>
-                <span>even</span>
-                <span>right feels better</span>
-              </Box>
-            </Box>
+            <DuelSlider
+              leftName={leftName}
+              rightName={rightName}
+              disabled={voting}
+              hover={hover}
+              resetKey={`${left?.id ?? ""}-${right?.id ?? ""}`}
+              onValue={handleSliderValue}
+              onPick={pick}
+            />
 
             <Divider sx={{ my: 2, opacity: 0.4 }} />
 
