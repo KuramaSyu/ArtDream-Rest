@@ -184,6 +184,15 @@ func (s *Server) castVote(c *gin.Context) {
 		notFound(c, "One of the images does not exist (or was deleted).")
 		return
 	}
+	policy, err := visibilityPolicy(c)
+	if err != nil {
+		asStoreError(c, err)
+		return
+	}
+	if policy.Hidden(images[req.LeftImageID]) || policy.Hidden(images[req.RightImageID]) {
+		notFound(c, "One of the images is not available for voting.")
+		return
+	}
 
 	mode, err := resolveVoteMode(c, req.ModeID, req.Mode)
 	if err != nil {
@@ -322,20 +331,24 @@ func encodeMetadata(m map[string]any) string {
 // --- ranking --------------------------------------------------------------
 
 type rankEntry struct {
-	Rank    int      `json:"rank"`
-	ID      string   `json:"id"`
-	URL     string   `json:"url"`
-	Author  string   `json:"author"`
-	Title   string   `json:"title"`
-	Width   int      `json:"width"`
-	Height  int      `json:"height"`
-	Wins    int      `json:"wins"`
-	Losses  int      `json:"losses"`
-	Ties    int      `json:"ties"`
-	Votes   int      `json:"votes"`
-	Score   float64  `json:"score"`
-	WinRate float64  `json:"winRate"`
-	Image   imageDTO `json:"image"`
+	Rank          int      `json:"rank"`
+	ID            string   `json:"id"`
+	URL           string   `json:"url"`
+	Author        string   `json:"author"`
+	Title         string   `json:"title"`
+	Width         int      `json:"width"`
+	Height        int      `json:"height"`
+	Wins          int      `json:"wins"`
+	Losses        int      `json:"losses"`
+	Ties          int      `json:"ties"`
+	Votes         int      `json:"votes"`
+	Score         float64  `json:"score"`
+	WinRate       float64  `json:"winRate"`
+	WinPercentage float64  `json:"winPercentage"`
+	Image         imageDTO `json:"image"`
+
+	// deranked is an internal sort key; it is never serialized publicly.
+	deranked bool
 }
 
 type rankResponse struct {
@@ -349,48 +362,24 @@ type rankResponse struct {
 	Winners    []rankEntry `json:"winners"`
 }
 
-func (s *Server) rankImages(c *gin.Context) {
-	rng, err := parseRange(c)
-	if err != nil {
-		badRequest(c, err.Error())
-		return
-	}
-	amount := parseAmount(c, 10, 100)
-	offset := parseOffset(c)
-	ctx := c.Request.Context()
+// rankStats is the shared aggregation result for public and admin rankings.
+type rankStats struct {
+	image  *store.Image
+	wins   int
+	losses int
+	ties   int
+	votes  int
+	score  float64
+}
 
-	votes, _, err := s.Store.ListVotes(ctx, store.VoteFilter{
-		From:       rng.From,
-		To:         rng.To,
-		Mode:       trimTo(c.Query("mode"), 64),
-		Author:     trimTo(c.Query("author"), 120),
-		TitleRegex: trimTo(c.Query("titleRegex"), 200),
-		Limit:      -1,
-	})
-	if err != nil {
-		asStoreError(c, err)
-		return
-	}
-
-	images, err := s.Store.GetImagesByIDs(ctx, collectVoteImageIDs(votes))
-	if err != nil {
-		serverError(c, err)
-		return
-	}
-
-	type stats struct {
-		image  *store.Image
-		wins   int
-		losses int
-		ties   int
-		votes  int
-		score  float64
-	}
-	byID := make(map[string]*stats, len(images))
-	ensure := func(img *store.Image) *stats {
+// computeRankStats turns a vote stream into per-image totals. skip removes
+// images hidden by the admin allow/deny lists; nil means "count everything".
+func computeRankStats(votes []store.Vote, images map[string]*store.Image, skip func(*store.Image) bool) ([]*rankStats, int) {
+	byID := make(map[string]*rankStats, len(images))
+	ensure := func(img *store.Image) *rankStats {
 		st := byID[img.ID]
 		if st == nil {
-			st = &stats{image: img}
+			st = &rankStats{image: img}
 			byID[img.ID] = st
 		}
 		return st
@@ -402,6 +391,9 @@ func (s *Server) rankImages(c *gin.Context) {
 		left, right := images[v.LeftImageID], images[v.RightImageID]
 		if left == nil || right == nil {
 			continue // image deleted: its history no longer counts
+		}
+		if skip != nil && (skip(left) || skip(right)) {
+			continue // image hidden by an admin filter
 		}
 		totalVotes++
 		ls, rs := ensure(left), ensure(right)
@@ -424,31 +416,68 @@ func (s *Server) rankImages(c *gin.Context) {
 		}
 	}
 
-	entries := make([]rankEntry, 0, len(byID))
+	out := make([]*rankStats, 0, len(byID))
 	for _, st := range byID {
-		dto := imageToDTO(st.image)
-		rate := 0.0
-		if st.votes > 0 {
-			rate = (float64(st.wins) + 0.5*float64(st.ties)) / float64(st.votes)
-		}
-		entries = append(entries, rankEntry{
-			ID:      st.image.ID,
-			URL:     dto.URL,
-			Author:  st.image.Author,
-			Title:   st.image.Title,
-			Width:   st.image.Width,
-			Height:  st.image.Height,
-			Wins:    st.wins,
-			Losses:  st.losses,
-			Ties:    st.ties,
-			Votes:   st.votes,
-			Score:   math.Round(st.score*1000) / 1000,
-			WinRate: math.Round(rate*1000) / 1000,
-			Image:   dto,
-		})
+		out = append(out, st)
 	}
+	return out, totalVotes
+}
+
+func winRateOf(st *rankStats) float64 {
+	if st.votes == 0 {
+		return 0
+	}
+	return (float64(st.wins) + 0.5*float64(st.ties)) / float64(st.votes)
+}
+
+func rankEntryFor(st *rankStats) rankEntry {
+	dto := imageToDTO(st.image)
+	rate := winRateOf(st)
+	return rankEntry{
+		ID:            st.image.ID,
+		URL:           dto.URL,
+		Author:        st.image.Author,
+		Title:         st.image.Title,
+		Width:         st.image.Width,
+		Height:        st.image.Height,
+		Wins:          st.wins,
+		Losses:        st.losses,
+		Ties:          st.ties,
+		Votes:         st.votes,
+		Score:         math.Round(st.score*1000) / 1000,
+		WinRate:       math.Round(rate*1000) / 1000,
+		WinPercentage: math.Round(rate*1000) / 10,
+		Image:         dto,
+	}
+}
+
+func sortRankStats(stats []*rankStats) {
+	sort.Slice(stats, func(i, j int) bool {
+		a, b := stats[i], stats[j]
+		if a.score != b.score {
+			return a.score > b.score
+		}
+		if a.wins != b.wins {
+			return a.wins > b.wins
+		}
+		ra, rb := winRateOf(a), winRateOf(b)
+		if ra != rb {
+			return ra > rb
+		}
+		if a.votes != b.votes {
+			return a.votes > b.votes
+		}
+		return a.image.Title < b.image.Title
+	})
+}
+
+func sortRankEntries(entries []rankEntry) {
 	sort.Slice(entries, func(i, j int) bool {
 		a, b := entries[i], entries[j]
+		// Deranked images remain visible but always trail regular entries.
+		if a.deranked != b.deranked {
+			return !a.deranked
+		}
 		if a.Score != b.Score {
 			return a.Score > b.Score
 		}
@@ -463,9 +492,67 @@ func (s *Server) rankImages(c *gin.Context) {
 		}
 		return a.Title < b.Title
 	})
+}
+
+func (s *Server) rankImages(c *gin.Context) {
+	rng, err := parseRange(c)
+	if err != nil {
+		badRequest(c, err.Error())
+		return
+	}
+	amount := parseAmount(c, 10, 100)
+	offset := parseOffset(c)
+	ctx := c.Request.Context()
+
+	policy, err := visibilityPolicy(c)
+	if err != nil {
+		asStoreError(c, err)
+		return
+	}
+
+	votes, _, err := s.Store.ListVotes(ctx, store.VoteFilter{
+		From:       rng.From,
+		To:         rng.To,
+		Mode:       trimTo(c.Query("mode"), 64),
+		Author:     trimTo(c.Query("author"), 120),
+		TitleRegex: trimTo(c.Query("titleRegex"), 200),
+		Limit:      -1,
+	})
+	if err != nil {
+		asStoreError(c, err)
+		return
+	}
+
+	images, err := s.Store.GetImagesByIDs(ctx, collectVoteImageIDs(votes))
+	if err != nil {
+		serverError(c, err)
+		return
+	}
+
+	stats, totalVotes := computeRankStats(votes, images, policy.Hidden)
+
+	modRows, err := moderationRows(c)
+	if err != nil {
+		serverError(c, err)
+		return
+	}
+	window := store.ModerationWindowForLabel(rng.Label)
+
+	entries := make([]rankEntry, 0, len(stats))
+	for _, st := range stats {
+		mod, hasMod := store.ModerationFor(modRows, st.image.ID, window)
+		if hasMod && mod.Hidden {
+			continue // hidden for this ranking period
+		}
+		entry := rankEntryFor(st)
+		entry.deranked = hasMod && mod.Deranked
+		entries = append(entries, entry)
+	}
+	sortRankEntries(entries)
 	for i := range entries {
 		entries[i].Rank = i + 1
 	}
+
 	total := len(entries)
 	if offset > len(entries) {
 		offset = len(entries)
@@ -493,7 +580,6 @@ func (s *Server) rankImages(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, resp)
 }
-
 func (s *Server) myVotes(c *gin.Context) {
 	user := currentUser(c)
 	rng, err := parseRange(c)

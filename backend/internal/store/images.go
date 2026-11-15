@@ -81,37 +81,48 @@ func (s *Store) GetImagesByIDs(ctx context.Context, ids []string) (map[string]*I
 	return out, rows.Err()
 }
 
-// ImagesByAuthor lists an author's images, newest first.
-func (s *Store) ImagesByAuthor(ctx context.Context, author string, limit, offset int) ([]Image, int, error) {
-	var total int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM images WHERE deleted_at IS NULL AND author = ? COLLATE NOCASE`, author,
-	).Scan(&total); err != nil {
-		return nil, 0, err
-	}
-	limit = clampLimit(limit, 100)
+// ImagesByAuthor lists an author's images, newest first. Images hidden by the
+// configured allow/deny lists are omitted (and not counted in the total).
+func (s *Store) ImagesByAuthor(ctx context.Context, author string, limit, offset int, policy *VisibilityPolicy) ([]Image, int, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+imageColumns+` FROM images
 		 WHERE deleted_at IS NULL AND author = ? COLLATE NOCASE
-		 ORDER BY created_at DESC, id ASC LIMIT ? OFFSET ?`, author, limit, max(offset, 0))
+		 ORDER BY created_at DESC, id ASC`, author)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer rows.Close()
-	out := make([]Image, 0)
+	all := make([]Image, 0)
 	for rows.Next() {
 		img, err := scanImage(rows)
 		if err != nil {
 			return nil, 0, err
 		}
-		out = append(out, *img)
+		if policy.Hidden(img) {
+			continue
+		}
+		all = append(all, *img)
 	}
-	return out, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	total := len(all)
+	offset = max(offset, 0)
+	if offset >= total {
+		return []Image{}, total, nil
+	}
+	all = all[offset:]
+	limit = clampLimit(limit, 100)
+	if limit < len(all) {
+		all = all[:limit]
+	}
+	return all, total, nil
 }
 
 // RandomImages picks up to amount live images. exclude removes ids (useful for
 // the ranking page so users do not immediately see the same pair again).
-func (s *Store) RandomImages(ctx context.Context, amount int, author string, exclude []string) ([]Image, error) {
+// Images hidden by the allow/deny lists are filtered out.
+func (s *Store) RandomImages(ctx context.Context, amount int, author string, exclude []string, policy *VisibilityPolicy) ([]Image, error) {
 	amount = clampAmount(amount, 50)
 	query := `SELECT ` + imageColumns + ` FROM images WHERE deleted_at IS NULL`
 	args := make([]any, 0)
@@ -127,7 +138,12 @@ func (s *Store) RandomImages(ctx context.Context, amount int, author string, exc
 		}
 	}
 	query += ` ORDER BY RANDOM() LIMIT ?`
-	args = append(args, amount)
+	fetch := amount
+	if !policy.Empty() {
+		// Fetch extra candidates so the hidden rows do not starve the pool.
+		fetch = clampAmount(amount*10, 500)
+	}
+	args = append(args, fetch)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -140,7 +156,13 @@ func (s *Store) RandomImages(ctx context.Context, amount int, author string, exc
 		if err != nil {
 			return nil, err
 		}
+		if policy.Hidden(img) {
+			continue
+		}
 		out = append(out, *img)
+		if len(out) >= amount {
+			break
+		}
 	}
 	return out, rows.Err()
 }

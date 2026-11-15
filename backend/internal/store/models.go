@@ -82,11 +82,18 @@ type ImageFilter struct {
 	Offset         int
 }
 
-// AppConfig is the server-side frontend configuration. It lets a global
-// display decision (currently ranking author anonymization) apply to every
-// visitor without changing what the ranking API returns.
+// AppConfig is the server-side frontend configuration plus the regex lists
+// that hide images from public API results. The lists never delete data; they
+// only remove matching images from listings, random pairs and rankings.
+//
+// Include lists are allowlists (an image must match at least one regex in
+// every non-empty include list). Exclude lists always win over includes.
 type AppConfig struct {
 	RankingAnonymized bool      `json:"rankingAnonymized"`
+	ExcludeAuthors    []string  `json:"excludeAuthors"`
+	ExcludeTitles     []string  `json:"excludeTitles"`
+	IncludeAuthors    []string  `json:"includeAuthors"`
+	IncludeTitles     []string  `json:"includeTitles"`
 	UpdatedAt         time.Time `json:"updatedAt"`
 }
 

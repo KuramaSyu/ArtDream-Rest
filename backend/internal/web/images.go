@@ -236,7 +236,12 @@ func (s *Server) imagesByAuthor(c *gin.Context) {
 		badRequest(c, "Provide an author, e.g. /images/author?author=Ada.")
 		return
 	}
-	images, total, err := s.Store.ImagesByAuthor(c.Request.Context(), author, parseAmount(c, 100, 500), parseOffset(c))
+	policy, err := visibilityPolicy(c)
+	if err != nil {
+		asStoreError(c, err)
+		return
+	}
+	images, total, err := s.Store.ImagesByAuthor(c.Request.Context(), author, parseAmount(c, 100, 500), parseOffset(c), policy)
 	if err != nil {
 		serverError(c, err)
 		return
@@ -252,7 +257,12 @@ func (s *Server) randomImages(c *gin.Context) {
 			exclude = append(exclude, id)
 		}
 	}
-	images, err := s.Store.RandomImages(c.Request.Context(), amount, trimTo(c.Query("author"), 120), exclude)
+	policy, err := visibilityPolicy(c)
+	if err != nil {
+		asStoreError(c, err)
+		return
+	}
+	images, err := s.Store.RandomImages(c.Request.Context(), amount, trimTo(c.Query("author"), 120), exclude, policy)
 	if err != nil {
 		serverError(c, err)
 		return
@@ -500,6 +510,7 @@ func (s *Server) deleteImage(ctx context.Context, id string, deleteVotes bool) e
 	if err := s.Store.DeleteImage(ctx, id); err != nil {
 		return err
 	}
+	_ = s.Store.DeleteModerationForImage(ctx, id)
 	_ = os.Remove(img.StoragePath)
 	_ = s.Renderer.RemoveForImage(id)
 	return nil

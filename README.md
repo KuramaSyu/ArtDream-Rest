@@ -143,7 +143,26 @@ Outcome derivation:
 
 Time ranges use rolling windows: `day` = 24h, `week` = 7d, `month` = 30d,
 `year` = 365d. `custom` accepts `seconds=N`, or `from`/`to` as RFC3339 or unix
-seconds. `all` covers everything.
+seconds. `all` covers everything. Every public rank entry includes `votes`,
+`wins`, `losses`, `ties`, `score`, `winRate` (0…1) and `winPercentage`
+(0…100, one decimal).
+
+### Visibility rules (admin)
+
+Admins can shape public results without deleting anything:
+
+- **Per-period hide/derank** (`image_moderation`, keyed by `image_id` +
+  `time_window` ∈ `all|day|week|month|year`). Hidden images disappear from the
+  public ranking for that period; deranked images stay visible but sort below
+  regular entries. The exact period row wins, otherwise the `all` row applies.
+  Custom ranges use the `all` rule. Moderation is only applied to rankings,
+  not to vote history or the image bytes.
+- **Regex lists** (`app_config`): `excludeAuthors`, `excludeTitles`,
+  `includeAuthors`, `includeTitles`. Exclude lists hide a match. Include lists
+  are allowlists: when one is non-empty, an image must match at least one of
+  its regexes. Matching is case-insensitive and unanchored. The lists filter
+  public rankings, random pairs, author listings and direct vote attempts;
+  they never delete rows or files.
 
 ## API overview
 
@@ -241,6 +260,11 @@ Vote request (flexible key spellings are accepted — `leftImageId`, `left-img`,
 | PATCH | `/admin/votes/:id` | Change mode/winner/value/min/max/metadata |
 | DELETE | `/admin/votes/:id` | Delete one vote |
 | DELETE | `/admin/votes` | Delete every vote matching the same filters (`ids=1,2` also supported) |
+| GET | `/admin/rank` | Exact numbers with moderation state; filters `time`, `seconds`, `author`, `titleRegex`, `mode`, `includeHidden`, `amount`, `offset` |
+| GET | `/admin/rank/filters` | Read the four visibility regex lists |
+| PATCH | `/admin/rank/filters` | Replace any of `excludeAuthors`, `excludeTitles`, `includeAuthors`, `includeTitles` (validated regex arrays) |
+| PATCH | `/admin/images/:id/moderation` | Upsert hide/derank: `{timeWindow, hidden?, deranked?, note?}` |
+| DELETE | `/admin/images/:id/moderation?timeWindow=day` | Remove one period override |
 | GET | `/admin/images` | Filters: `author`, `titleRegex`, `amount`, `offset` |
 | PATCH | `/admin/images/:id` | Change author/title |
 | DELETE | `/admin/images/:id` | Delete image; `keepVotes=true` preserves votes |
@@ -269,9 +293,11 @@ curl -X DELETE \
   view. Click one for a gentle 2/5 or 4/5 vote, hover to nudge the long slider,
   or drag the 1–100 slider yourself. Arrow keys vote when nothing interactive
   is focused; Enter submits the slider. `Skip pair` avoids the current pair.
-- **Admin:** rankings (filters, edit, delete, bulk delete), images (edit,
-  delete, bulk delete), people (create, edit, grant/revoke admin, delete),
-  and vote-mode management. The header has a global
+- **Admin:** ranking (exact numbers for any period, per-period hide/derank,
+  score rank vs displayed rank), votes (filters, edit, delete, bulk delete),
+  images (edit, delete, bulk delete), people (create, edit, grant/revoke admin,
+  delete), visibility rules (four regex lists), and vote-mode management. The
+  header has a global
   **Anonymize ranking / Reveal ranking authors** button. It writes the
   server-backed frontend config (`PATCH /admin/frontend-config`), so every
   visitor sees the same choice. Ranking surfaces (rank page, fullscreen,

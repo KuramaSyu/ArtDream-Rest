@@ -86,6 +86,18 @@ CREATE TABLE IF NOT EXISTS app_config (
 	updated_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS image_moderation (
+	image_id    TEXT NOT NULL,
+	time_window TEXT NOT NULL,
+	hidden      INTEGER NOT NULL DEFAULT 0,
+	deranked    INTEGER NOT NULL DEFAULT 0,
+	note        TEXT NOT NULL DEFAULT '',
+	updated_at  INTEGER NOT NULL,
+	updated_by  INTEGER,
+	PRIMARY KEY (image_id, time_window)
+);
+CREATE INDEX IF NOT EXISTS image_moderation_window_idx ON image_moderation(time_window);
+
 CREATE TABLE IF NOT EXISTS vote_modes (
 	id          INTEGER PRIMARY KEY AUTOINCREMENT,
 	name        TEXT NOT NULL COLLATE NOCASE UNIQUE,

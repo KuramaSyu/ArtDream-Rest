@@ -35,16 +35,31 @@ import {
   DeleteOutlineRounded,
   EditOutlined,
   EmojiEventsRounded,
+  FilterAltRounded,
   GroupAddRounded,
   ImageRounded,
   LeaderboardRounded,
   RefreshRounded,
+  RestoreRounded,
+  TrendingDownRounded,
   TuneRounded,
   VisibilityOffRounded,
   VisibilityRounded,
 } from "@mui/icons-material";
 import { api, ApiError, imageVariant } from "../api/client";
-import type { AdminFilter, ImageItem, TimeRange, User, Vote, VoteMode, VoteWinner } from "../api/types";
+import type {
+  AdminFilter,
+  AdminRankEntry,
+  AdminRankResponse,
+  ImageItem,
+  ModerationWindow,
+  RankFilters,
+  TimeRange,
+  User,
+  Vote,
+  VoteMode,
+  VoteWinner,
+} from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { ConfirmDialog, useToast } from "../components/Feedback";
 import { EmptyState, LoadingView } from "../components/Loading";
@@ -63,6 +78,33 @@ const TIME_OPTIONS: Array<{ value: TimeRange; label: string }> = [
   { value: "custom", label: "Custom seconds" },
 ];
 
+type AdminTab = "rank" | "votes" | "images" | "users" | "rules";
+
+type RulesDraft = Record<keyof RankFilters, string>;
+
+const EMPTY_RANK_FILTERS: RankFilters = {
+  excludeAuthors: [],
+  excludeTitles: [],
+  includeAuthors: [],
+  includeTitles: [],
+};
+
+function filtersToDraft(filters: RankFilters): RulesDraft {
+  return {
+    excludeAuthors: filters.excludeAuthors.join("\n"),
+    excludeTitles: filters.excludeTitles.join("\n"),
+    includeAuthors: filters.includeAuthors.join("\n"),
+    includeTitles: filters.includeTitles.join("\n"),
+  };
+}
+
+function draftToPatterns(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
 const inputSx = { "& .MuiInputBase-input": { fontSize: "0.86rem" } } as const;
 
 export function AdminPage() {
@@ -71,7 +113,21 @@ export function AdminPage() {
   const { config: frontendConfig, update: updateFrontendConfig } = useFrontendConfig();
   const rankingAnonymized = frontendConfig.rankingAnonymized;
   const [rankingBusy, setRankingBusy] = useState(false);
-  const [tab, setTab] = useState<"votes" | "images" | "users">("votes");
+  const [tab, setTab] = useState<AdminTab>("rank");
+
+  const [rank, setRank] = useState<AdminRankResponse | null>(null);
+  const [rankLoading, setRankLoading] = useState(false);
+  const [rankPage, setRankPage] = useState(1);
+  const [rankFilters, setRankFilters] = useState<AdminFilter>({ time: "all" });
+  const [rankDraft, setRankDraft] = useState<AdminFilter>({ time: "all" });
+  const [rankIncludeHidden, setRankIncludeHidden] = useState(true);
+  const [rankRefresh, setRankRefresh] = useState(0);
+  const [moderationBusy, setModerationBusy] = useState("");
+
+  const [rankFiltersConfig, setRankFiltersConfig] = useState<RankFilters>(EMPTY_RANK_FILTERS);
+  const [rulesDraft, setRulesDraft] = useState<RulesDraft>(filtersToDraft(EMPTY_RANK_FILTERS));
+  const [rulesLoading, setRulesLoading] = useState(false);
+  const [rulesBusy, setRulesBusy] = useState(false);
 
   const [modes, setModes] = useState<VoteMode[]>([]);
   const [votes, setVotes] = useState<Vote[]>([]);
@@ -180,6 +236,44 @@ export function AdminPage() {
     if (tab === "users") void loadUsers();
   }, [loadUsers, tab, usersRefresh]);
 
+  const loadRank = useCallback(async () => {
+    setRankLoading(true);
+    try {
+      const result = await api.admin.rank({
+        ...rankFilters,
+        amount: PAGE_SIZE,
+        offset: (rankPage - 1) * PAGE_SIZE,
+        includeHidden: rankIncludeHidden,
+      });
+      setRank(result);
+    } catch (error) {
+      notify(error instanceof ApiError ? error.message : "Could not load the ranking.", "error");
+    } finally {
+      setRankLoading(false);
+    }
+  }, [notify, rankFilters, rankIncludeHidden, rankPage]);
+
+  useEffect(() => {
+    if (tab === "rank") void loadRank();
+  }, [loadRank, rankRefresh, tab]);
+
+  const loadFilterRules = useCallback(async () => {
+    setRulesLoading(true);
+    try {
+      const result = await api.admin.rankFilters();
+      setRankFiltersConfig(result);
+      setRulesDraft(filtersToDraft(result));
+    } catch (error) {
+      notify(error instanceof ApiError ? error.message : "Could not load the filter rules.", "error");
+    } finally {
+      setRulesLoading(false);
+    }
+  }, [notify]);
+
+  useEffect(() => {
+    if (tab === "rules") void loadFilterRules();
+  }, [loadFilterRules, tab]);
+
   const voteStage = useMemo(
     () =>
       votes.flatMap((vote) =>
@@ -188,7 +282,19 @@ export function AdminPage() {
     [votes],
   );
   const imageStage = useMemo(() => images.map((image) => image.url), [images]);
-  useStageImages(tab === "votes" ? voteStage : tab === "images" ? imageStage : []);
+  const rankStage = useMemo(
+    () => (rank?.winners ?? []).map((entry) => entry.url),
+    [rank],
+  );
+  useStageImages(
+    tab === "votes"
+      ? voteStage
+      : tab === "images"
+        ? imageStage
+        : tab === "rank"
+          ? rankStage
+          : [],
+  );
 
   const applyVoteFilters = () => {
     if (voteDraft.time === "custom" && (!voteDraft.seconds || voteDraft.seconds <= 0)) {
@@ -214,6 +320,86 @@ export function AdminPage() {
     setImageDraft({});
     setImageFilters({});
     setImagePage(1);
+  };
+
+  const applyRankFilters = () => {
+    if (rankDraft.time === "custom" && (!rankDraft.seconds || rankDraft.seconds <= 0)) {
+      notify("Custom ranges need a positive number of seconds.", "warning");
+      return;
+    }
+    setRankPage(1);
+    setRankFilters({ ...rankDraft });
+  };
+
+  const resetRankFilters = () => {
+    setRankDraft({ time: "all" });
+    setRankFilters({ time: "all" });
+    setRankPage(1);
+  };
+
+  const rankWindow: ModerationWindow = rank?.window ?? "all";
+
+  const toggleModeration = async (
+    entry: AdminRankEntry,
+    patch: { hidden?: boolean; deranked?: boolean },
+  ) => {
+    setModerationBusy(entry.id);
+    try {
+      await api.admin.setModeration(entry.id, {
+        timeWindow: rankWindow,
+        hidden: patch.hidden ?? entry.hidden,
+        deranked: patch.deranked ?? entry.deranked,
+      });
+      notify(
+        patch.hidden !== undefined
+          ? patch.hidden
+            ? `Hidden for ${rankWindow}.`
+            : `Visible again for ${rankWindow}.`
+          : patch.deranked
+            ? `Deranked for ${rankWindow}.`
+            : `Derank removed for ${rankWindow}.`,
+        "success",
+      );
+      setRankRefresh((value) => value + 1);
+    } catch (error) {
+      notify(error instanceof ApiError ? error.message : "Could not update moderation.", "error");
+    } finally {
+      setModerationBusy("");
+    }
+  };
+
+  const clearModeration = async (entry: AdminRankEntry) => {
+    setModerationBusy(entry.id);
+    try {
+      await api.admin.clearModeration(entry.id, rankWindow);
+      notify(`Cleared ${rankWindow} override; the all-time rule applies again.`, "success");
+      setRankRefresh((value) => value + 1);
+    } catch (error) {
+      notify(error instanceof ApiError ? error.message : "Could not clear moderation.", "error");
+    } finally {
+      setModerationBusy("");
+    }
+  };
+
+  const saveFilterRules = async () => {
+    setRulesBusy(true);
+    try {
+      const result = await api.admin.updateRankFilters({
+        excludeAuthors: draftToPatterns(rulesDraft.excludeAuthors),
+        excludeTitles: draftToPatterns(rulesDraft.excludeTitles),
+        includeAuthors: draftToPatterns(rulesDraft.includeAuthors),
+        includeTitles: draftToPatterns(rulesDraft.includeTitles),
+      });
+      setRankFiltersConfig(result);
+      setRulesDraft(filtersToDraft(result));
+      notify("Visibility rules saved. Public listings and rankings update immediately.", "success");
+      setRankRefresh((value) => value + 1);
+      setImagesRefresh((value) => value + 1);
+    } catch (error) {
+      notify(error instanceof ApiError ? error.message : "Could not save the filter rules.", "error");
+    } finally {
+      setRulesBusy(false);
+    }
   };
 
   const saveVote = async (payload: {
@@ -490,6 +676,7 @@ export function AdminPage() {
                 setVotesRefresh((value) => value + 1);
                 setImagesRefresh((value) => value + 1);
                 setUsersRefresh((value) => value + 1);
+                setRankRefresh((value) => value + 1);
               }}
               sx={{ borderRadius: 99, textTransform: "none" }}
             >
@@ -501,17 +688,192 @@ export function AdminPage() {
 
       <Tabs
         value={tab}
-        onChange={(_event, value: "votes" | "images" | "users") => setTab(value)}
+        onChange={(_event, value: AdminTab) => setTab(value)}
+        variant="scrollable"
+        allowScrollButtonsMobile
         sx={{
           mb: 3,
           minHeight: 42,
           "& .MuiTab-root": { textTransform: "none", fontWeight: 650, minHeight: 42 },
         }}
       >
-        <Tab value="votes" label="Rankings" icon={<LeaderboardRounded fontSize="small" />} iconPosition="start" />
+        <Tab value="rank" label="Ranking" icon={<LeaderboardRounded fontSize="small" />} iconPosition="start" />
+        <Tab value="votes" label="Votes" icon={<EmojiEventsRounded fontSize="small" />} iconPosition="start" />
         <Tab value="images" label="Images" icon={<ImageRounded fontSize="small" />} iconPosition="start" />
         <Tab value="users" label="People" icon={<GroupAddRounded fontSize="small" />} iconPosition="start" />
+        <Tab value="rules" label="Rules" icon={<FilterAltRounded fontSize="small" />} iconPosition="start" />
       </Tabs>
+
+      {tab === "rank" && (
+        <Box>
+          <FilterCard>
+            <TimeFilter draft={rankDraft} setDraft={setRankDraft} />
+            <TextField
+              label="Author contains"
+              size="small"
+              value={rankDraft.author ?? ""}
+              onChange={(event) => setRankDraft({ ...rankDraft, author: event.target.value })}
+              sx={{ minWidth: 150, ...inputSx }}
+            />
+            <TextField
+              label="Title regex"
+              size="small"
+              value={rankDraft.titleRegex ?? ""}
+              onChange={(event) => setRankDraft({ ...rankDraft, titleRegex: event.target.value })}
+              sx={{ minWidth: 150, ...inputSx }}
+              inputProps={{ spellCheck: false }}
+            />
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={rankIncludeHidden}
+                  onChange={(event) => {
+                    setRankPage(1);
+                    setRankIncludeHidden(event.target.checked);
+                  }}
+                />
+              }
+              label="include hidden"
+            />
+            <Box sx={{ flex: 1 }} />
+            <Button onClick={applyRankFilters} variant="contained" sx={{ borderRadius: 99, textTransform: "none" }}>
+              Apply
+            </Button>
+            <Button onClick={resetRankFilters} sx={{ textTransform: "none" }}>
+              Reset
+            </Button>
+          </FilterCard>
+
+          <Alert severity="info" sx={{ borderRadius: 3, mb: 2 }}>
+            Exact numbers for <b>{rank?.time ?? rankFilters.time}</b>. Hide/derank decisions are stored
+            for <b>{rankWindow}</b> and fall back to the <b>all</b> rule. Hiding never deletes an image;
+            custom ranges use the all-time rule.
+          </Alert>
+
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.4, opacity: 0.8 }}>
+            {rank?.total ?? 0} ranked image{(rank?.total ?? 0) === 1 ? "" : "s"} ·{" "}
+            {rank?.totalVotes ?? 0} vote{(rank?.totalVotes ?? 0) === 1 ? "" : "s"} ·{" "}
+            {rank?.hiddenCount ?? 0} hidden · {rank?.derankedCount ?? 0} deranked ·{" "}
+            {rank?.excludedCount ?? 0} excluded by regex rules.
+          </Typography>
+
+          {rankLoading ? (
+            <LoadingView label="Counting every vote…" />
+          ) : !rank || rank.winners.length === 0 ? (
+            <EmptyState emoji="📊" title="No ranking data" description="Try a wider period or clear the filters." />
+          ) : (
+            <TableContainer
+              className="glass"
+              sx={{ borderRadius: 4, overflowX: "auto", border: "1px solid rgba(255,255,255,.08)" }}
+            >
+              <Table size="small" sx={{ minWidth: 940 }}>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Rank</TableCell>
+                    <TableCell>Artwork</TableCell>
+                    <TableCell align="right">Votes</TableCell>
+                    <TableCell align="right">W / L / T</TableCell>
+                    <TableCell align="right">Win %</TableCell>
+                    <TableCell align="right">Score</TableCell>
+                    <TableCell>State</TableCell>
+                    <TableCell align="right">Moderation</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {rank.winners.map((entry) => (
+                    <TableRow key={entry.id} hover sx={{ opacity: entry.hidden ? 0.55 : 1 }}>
+                      <TableCell>
+                        <Typography sx={{ fontWeight: 750 }}>#{entry.rank}</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          score #{entry.scoreRank}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Box sx={{ display: "flex", alignItems: "center", gap: 1, maxWidth: 320 }}>
+                          <Box
+                            component="img"
+                            src={imageVariant(entry.url, { w: 360, quality: 78 })}
+                            alt=""
+                            loading="lazy"
+                            sx={{ width: 56, height: 42, objectFit: "cover", borderRadius: 1.5, flexShrink: 0 }}
+                          />
+                          <Box sx={{ minWidth: 0 }}>
+                            <Typography noWrap variant="body2" sx={{ fontWeight: 620 }}>
+                              {entry.title || "Untitled"}
+                            </Typography>
+                            <Typography noWrap variant="caption" color="text.secondary" display="block">
+                              {entry.author}
+                            </Typography>
+                          </Box>
+                        </Box>
+                      </TableCell>
+                      <TableCell align="right">{entry.votes}</TableCell>
+                      <TableCell align="right">
+                        {entry.wins} / {entry.losses} / {entry.ties}
+                      </TableCell>
+                      <TableCell align="right">{(entry.winPercentage ?? entry.winRate * 100).toFixed(1)}%</TableCell>
+                      <TableCell align="right">{entry.score.toFixed(3)}</TableCell>
+                      <TableCell>
+                        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+                          {entry.excluded && <Chip size="small" color="info" label="excluded" />}
+                          {entry.hidden && <Chip size="small" color="error" label="hidden" />}
+                          {entry.deranked && <Chip size="small" color="warning" label="deranked" />}
+                          {!entry.hidden && !entry.deranked && !entry.excluded && (
+                            <Chip size="small" variant="outlined" label="visible" />
+                          )}
+                          {entry.override && (
+                            <Typography variant="caption" color="text.secondary" display="block">
+                              {entry.note || "custom rule"}
+                            </Typography>
+                          )}
+                        </Box>
+                      </TableCell>
+                      <TableCell align="right">
+                        <Tooltip title={entry.hidden ? "Show for this period" : "Hide for this period"}>
+                          <span>
+                            <IconButton
+                              size="small"
+                              disabled={entry.excluded || moderationBusy === entry.id}
+                              onClick={() => void toggleModeration(entry, { hidden: !entry.hidden })}
+                            >
+                              {entry.hidden ? <VisibilityRounded fontSize="small" /> : <VisibilityOffRounded fontSize="small" />}
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                        <Tooltip title={entry.deranked ? "Remove derank" : "Derank for this period"}>
+                          <span>
+                            <IconButton
+                              size="small"
+                              color={entry.deranked ? "warning" : "default"}
+                              disabled={moderationBusy === entry.id}
+                              onClick={() => void toggleModeration(entry, { deranked: !entry.deranked })}
+                            >
+                              <TrendingDownRounded fontSize="small" />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                        <Tooltip title="Clear this period's override">
+                          <span>
+                            <IconButton
+                              size="small"
+                              disabled={!entry.override || moderationBusy === entry.id}
+                              onClick={() => void clearModeration(entry)}
+                            >
+                              <RestoreRounded fontSize="small" />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+
+          <Pager page={rankPage} total={rank?.total ?? 0} onChange={(page) => setRankPage(page)} />
+        </Box>
+      )}
 
       {tab === "votes" && (
         <Box>
@@ -812,6 +1174,72 @@ export function AdminPage() {
         </Box>
       )}
 
+      {tab === "rules" && (
+        <Box>
+          <Alert severity="warning" sx={{ borderRadius: 3, mb: 2 }}>
+            These regex lists only hide images from public API results and rankings. Nothing is
+            deleted. <b>Exclude</b> rules always win. <b>Include</b> lists are allowlists: when a list
+            has entries, an image must match at least one regex in that list (and every non-empty
+            include list). Patterns are case-insensitive and unanchored. Saved:{" "}
+            {rankFiltersConfig.excludeAuthors.length} excluded author ·{" "}
+            {rankFiltersConfig.excludeTitles.length} excluded title ·{" "}
+            {rankFiltersConfig.includeAuthors.length} included author ·{" "}
+            {rankFiltersConfig.includeTitles.length} included title patterns.
+          </Alert>
+
+          {rulesLoading ? (
+            <LoadingView label="Reading the rules…" />
+          ) : (
+            <Box
+              sx={{
+                display: "grid",
+                gap: 2,
+                gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" },
+              }}
+            >
+              <PatternListCard
+                title="Exclude authors"
+                description="Hide images when the author matches any regex (one per line)."
+                value={rulesDraft.excludeAuthors}
+                onChange={(value) => setRulesDraft({ ...rulesDraft, excludeAuthors: value })}
+              />
+              <PatternListCard
+                title="Exclude titles"
+                description="Hide images when the title matches any regex (one per line)."
+                value={rulesDraft.excludeTitles}
+                onChange={(value) => setRulesDraft({ ...rulesDraft, excludeTitles: value })}
+              />
+              <PatternListCard
+                title="Include only authors (whitelist)"
+                description="When non-empty, only authors matching at least one regex stay listed."
+                value={rulesDraft.includeAuthors}
+                onChange={(value) => setRulesDraft({ ...rulesDraft, includeAuthors: value })}
+              />
+              <PatternListCard
+                title="Include only titles (whitelist)"
+                description="When non-empty, only titles matching at least one regex stay listed."
+                value={rulesDraft.includeTitles}
+                onChange={(value) => setRulesDraft({ ...rulesDraft, includeTitles: value })}
+              />
+            </Box>
+          )}
+
+          <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1, mt: 2 }}>
+            <Button onClick={() => void loadFilterRules()} disabled={rulesBusy} sx={{ textTransform: "none" }}>
+              Reload
+            </Button>
+            <Button
+              variant="contained"
+              onClick={() => void saveFilterRules()}
+              disabled={rulesBusy || rulesLoading}
+              sx={{ borderRadius: 99, textTransform: "none" }}
+            >
+              {rulesBusy ? "Saving…" : "Save rules"}
+            </Button>
+          </Box>
+        </Box>
+      )}
+
       {tab === "users" && (
         <Box>
           <FilterCard>
@@ -1088,6 +1516,42 @@ function FilterCard({ children }: { children: ReactNode }) {
       }}
     >
       {children}
+    </Box>
+  );
+}
+
+function PatternListCard({
+  title,
+  description,
+  value,
+  onChange,
+}: {
+  title: string;
+  description: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const count = draftToPatterns(value).length;
+  return (
+    <Box className="glass" sx={{ borderRadius: 4, p: 2 }}>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 0.4 }}>
+        <Typography sx={{ fontWeight: 700 }}>{title}</Typography>
+        <Chip size="small" label={`${count} pattern${count === 1 ? "" : "s"}`} />
+      </Box>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 1.2, opacity: 0.85 }}>
+        {description}
+      </Typography>
+      <TextField
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="spam.*bot\n(^|_)ad(vert)?_"
+        multiline
+        minRows={6}
+        fullWidth
+        size="small"
+        inputProps={{ spellCheck: false }}
+        sx={{ "& textarea": { fontFamily: "monospace", fontSize: "0.85rem" } }}
+      />
     </Box>
   );
 }

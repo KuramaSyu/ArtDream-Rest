@@ -406,6 +406,21 @@ func sStore(c *gin.Context) *store.Store {
 	return s.Store
 }
 
+// visibilityPolicy loads and compiles the admin-managed regex lists. It is
+// applied to public listings, random pairs and rankings only; library/admin
+// endpoints that manage individual images stay unaffected.
+func visibilityPolicy(c *gin.Context) (*store.VisibilityPolicy, error) {
+	cfg, err := sStore(c).GetAppConfig(c.Request.Context())
+	if err != nil {
+		return nil, err
+	}
+	return store.CompileVisibility(cfg)
+}
+
+func moderationRows(c *gin.Context) ([]store.ImageModeration, error) {
+	return sStore(c).ListImageModeration(c.Request.Context())
+}
+
 func rendererOf(c *gin.Context) *imageproc.Renderer {
 	return c.MustGet(ctxServerKey).(*Server).Renderer
 }

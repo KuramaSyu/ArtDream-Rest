@@ -18,7 +18,10 @@ func (s *Server) frontendConfig(c *gin.Context) {
 		serverError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, config)
+	c.JSON(http.StatusOK, gin.H{
+		"rankingAnonymized": config.RankingAnonymized,
+		"updatedAt":         config.UpdatedAt,
+	})
 }
 
 func (s *Server) updateFrontendConfig(c *gin.Context) {
@@ -37,5 +40,8 @@ func (s *Server) updateFrontendConfig(c *gin.Context) {
 		serverError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, config)
+	c.JSON(http.StatusOK, gin.H{
+		"rankingAnonymized": config.RankingAnonymized,
+		"updatedAt":         config.UpdatedAt,
+	})
 }

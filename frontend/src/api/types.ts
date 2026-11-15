@@ -73,7 +73,56 @@ export interface RankEntry {
   votes: number;
   score: number;
   winRate: number;
+  /** Win rate expressed as a 0–100 percentage, rounded to one decimal. */
+  winPercentage?: number;
   image: ImageItem;
+}
+
+export interface AdminRankEntry extends RankEntry {
+  /** Rank by raw score, ignoring hide/derank moderation. */
+  scoreRank: number;
+  hidden: boolean;
+  deranked: boolean;
+  excluded: boolean;
+  /** True when an explicit override exists for this image/window pair. */
+  override: boolean;
+  note?: string;
+  moderationWindow: ModerationWindow;
+}
+
+export interface AdminRankResponse {
+  time: string;
+  window: ModerationWindow;
+  from?: string;
+  to?: string;
+  amount: number;
+  offset: number;
+  total: number;
+  totalVotes: number;
+  hiddenCount: number;
+  derankedCount: number;
+  excludedCount: number;
+  winners: AdminRankEntry[];
+}
+
+export type ModerationWindow = "all" | "day" | "week" | "month" | "year";
+
+/** Admin-managed regex lists that hide images from public API results. */
+export interface RankFilters {
+  excludeAuthors: string[];
+  excludeTitles: string[];
+  includeAuthors: string[];
+  includeTitles: string[];
+}
+
+export interface ImageModeration {
+  imageId: string;
+  timeWindow: ModerationWindow;
+  hidden: boolean;
+  deranked: boolean;
+  note: string;
+  updatedAt: string;
+  updatedBy?: number;
 }
 
 export interface RankResponse {

@@ -68,6 +68,12 @@ func (s *Server) Router() *gin.Engine {
 		admin.DELETE("/admin/votes/:id", s.deleteVoteAdmin)
 		admin.DELETE("/admin/votes", s.bulkDeleteVotesAdmin)
 
+		admin.GET("/admin/rank", s.adminRankImages)
+		admin.GET("/admin/rank/filters", s.getRankFilters)
+		admin.PATCH("/admin/rank/filters", s.updateRankFilters)
+		admin.PATCH("/admin/images/:id/moderation", s.updateImageModeration)
+		admin.DELETE("/admin/images/:id/moderation", s.deleteImageModeration)
+
 		admin.PATCH("/admin/frontend-config", s.updateFrontendConfig)
 		admin.POST("/admin/rank/modes", s.createVoteMode)
 		admin.PATCH("/admin/rank/modes/:id", s.updateVoteMode)

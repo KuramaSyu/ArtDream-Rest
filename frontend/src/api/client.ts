@@ -1,9 +1,13 @@
 import { getToken, notifyUnauthorized } from "./session";
 import type {
   AdminFilter,
+  AdminRankResponse,
   FrontendConfig,
   ImageItem,
+  ImageModeration,
   ListResponse,
+  ModerationWindow,
+  RankFilters,
   RankQuery,
   RankResponse,
   SessionResponse,
@@ -189,6 +193,32 @@ export const api = {
       request<{ items: Vote[]; total: number; time: string }>("/admin/votes", {
         query: filter as Record<string, QueryValue>,
       }),
+
+    rank: (filter: AdminFilter & { includeHidden?: boolean } = {}) =>
+      request<AdminRankResponse>("/admin/rank", {
+        query: filter as Record<string, QueryValue>,
+      }),
+
+    rankFilters: () => request<RankFilters>("/admin/rank/filters"),
+
+    updateRankFilters: (body: Partial<RankFilters>) =>
+      request<RankFilters>("/admin/rank/filters", { method: "PATCH", body }),
+
+    setModeration: (
+      id: string,
+      body: {
+        timeWindow: ModerationWindow;
+        hidden?: boolean;
+        deranked?: boolean;
+        note?: string;
+      },
+    ) => request<ImageModeration>(`/admin/images/${id}/moderation`, { method: "PATCH", body }),
+
+    clearModeration: (id: string, timeWindow: ModerationWindow) =>
+      request<{ deleted: string; timeWindow: ModerationWindow }>(
+        `/admin/images/${id}/moderation`,
+        { method: "DELETE", query: { timeWindow } },
+      ),
 
     updateVote: (id: number, body: VoteUpdatePayload) =>
       request<Vote>(`/admin/votes/${id}`, { method: "PATCH", body }),
