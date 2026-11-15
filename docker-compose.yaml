@@ -7,6 +7,7 @@ services:
       DATA_DIR: /data
       GIN_MODE: release
       ALLOWED_ORIGINS: "http://localhost:5173,http://localhost:8082,http://localhost:8080,https://artdream.inu-the-bot.com"
+      IMAGE_RENDER_CONCURRENCY: "${IMAGE_RENDER_CONCURRENCY:-2}"
     volumes:
       - artdream-data:/data
     ports:

@@ -13,7 +13,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/gen2brain/webp"
 	_ "golang.org/x/image/bmp"
@@ -36,9 +39,31 @@ type RenderOptions struct {
 	SourceMime string
 }
 
+// maxOutputPixels bounds the derivative size we are willing to allocate.
+// It is deliberately below the upload limit: a full 120 MP source decoded at
+// request time needs several hundred MB, and the rank/gallery pages request
+// many variants at once.
+const maxOutputPixels = 48_000_000
+
 // Renderer owns the derivative cache directory.
 type Renderer struct {
 	CacheDir string
+
+	// sem bounds how many decode/scale/encode pipelines run at the same time.
+	// Without it a page load can start dozens of renders (each holding a full
+	// decoded source and an encoder working buffer) and the process dies of
+	// OOM.
+	sem chan struct{}
+
+	mu    sync.Mutex
+	calls map[string]*renderCall
+}
+
+type renderCall struct {
+	done        chan struct{}
+	data        []byte
+	contentType string
+	err         error
 }
 
 // New creates a renderer, ensuring the cache directory exists.
@@ -46,7 +71,30 @@ func New(cacheDir string) (*Renderer, error) {
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create image cache: %w", err)
 	}
-	return &Renderer{CacheDir: cacheDir}, nil
+	return &Renderer{
+		CacheDir: cacheDir,
+		sem:      make(chan struct{}, renderConcurrency()),
+		calls:    make(map[string]*renderCall),
+	}, nil
+}
+
+// renderConcurrency picks a conservative default: image decoding/scaling is
+// memory bound, not CPU bound, so running more than a handful of pipelines in
+// parallel only increases peak RSS. Override with IMAGE_RENDER_CONCURRENCY.
+func renderConcurrency() int {
+	if raw := strings.TrimSpace(os.Getenv("IMAGE_RENDER_CONCURRENCY")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			return n
+		}
+	}
+	n := runtime.GOMAXPROCS(0) / 2
+	if n < 2 {
+		n = 2
+	}
+	if n > 4 {
+		n = 4
+	}
+	return n
 }
 
 // Render returns encoded image bytes and their content type. Results are
@@ -79,6 +127,56 @@ func (r *Renderer) Render(sourcePath, imageID string, opts RenderOptions) ([]byt
 		return data, contentType(format), nil
 	}
 
+	// Collapse duplicate requests (the same derivative is often requested
+	// several times while a page loads) into a single decode/encode pass.
+	call, leader := r.beginCall(key)
+	if !leader {
+		<-call.done
+		return call.data, call.contentType, call.err
+	}
+	defer r.finishCall(key, call)
+
+	data, ctype, err := r.renderGuarded(sourcePath, dir, outPath, format, quality, opts)
+	call.data, call.contentType, call.err = data, ctype, err
+	return data, ctype, err
+}
+
+// renderGuarded turns a panic in the image pipeline into an error so that
+// goroutines waiting on the same derivative don't receive an empty result.
+func (r *Renderer) renderGuarded(sourcePath, dir, outPath, format string, quality int, opts RenderOptions) (data []byte, ctype string, err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			data, ctype, err = nil, "", fmt.Errorf("render panic: %v", rec)
+		}
+	}()
+	return r.render(sourcePath, dir, outPath, format, quality, opts)
+}
+
+// beginCall registers an in-flight render for key. The first caller becomes
+// the leader and performs the work; everyone else waits for its result.
+func (r *Renderer) beginCall(key string) (*renderCall, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if call, ok := r.calls[key]; ok {
+		return call, false
+	}
+	call := &renderCall{done: make(chan struct{})}
+	r.calls[key] = call
+	return call, true
+}
+
+func (r *Renderer) finishCall(key string, call *renderCall) {
+	r.mu.Lock()
+	delete(r.calls, key)
+	r.mu.Unlock()
+	close(call.done)
+}
+
+func (r *Renderer) render(sourcePath, dir, outPath, format string, quality int, opts RenderOptions) ([]byte, string, error) {
+	// Bound concurrent pipelines before allocating any image buffers.
+	r.sem <- struct{}{}
+	defer func() { <-r.sem }()
+
 	src, err := decodeFile(sourcePath)
 	if err != nil {
 		return nil, "", fmt.Errorf("decode source image: %w", err)
@@ -88,6 +186,9 @@ func (r *Renderer) Render(sourcePath, imageID string, opts RenderOptions) ([]byt
 	dstW, dstH := targetSize(srcW, srcH, opts.Width, opts.Height)
 	if dstW <= 0 || dstH <= 0 {
 		return nil, "", fmt.Errorf("invalid target size %dx%d", dstW, dstH)
+	}
+	if int64(dstW)*int64(dstH) > maxOutputPixels {
+		return nil, "", fmt.Errorf("target size %dx%d exceeds the render budget", dstW, dstH)
 	}
 
 	img := src
@@ -197,9 +298,15 @@ func clampQuality(format string, q int) int {
 func targetSize(srcW, srcH, reqW, reqH int) (int, int) {
 	switch {
 	case reqW > 0 && reqH > 0:
-		// Explicit two-axis requests are honoured verbatim (clients may want
-		// a specific crop box), but clamp the single-axis paths below so the
-		// UI never decodes/encodes an upscaled copy by accident.
+		// Explicit two-axis requests are honoured, but never above the source
+		// dimensions: `?w=8192&h=8192` used to allocate a multi-hundred-MB
+		// upscaled NRGBA buffer for a small original.
+		if reqW > srcW {
+			reqW = srcW
+		}
+		if reqH > srcH {
+			reqH = srcH
+		}
 		return reqW, reqH
 	case reqW > 0:
 		if reqW > srcW {
