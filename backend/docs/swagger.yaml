@@ -110,6 +110,11 @@ definitions:
       defaultImageVisibility:
         example: all
         type: string
+      rankRotationEnabled:
+        type: boolean
+      rankRotationPercent:
+        example: 60
+        type: integer
       rankingAnonymized:
         type: boolean
       updatedAt:
@@ -447,6 +452,10 @@ definitions:
         $ref: '#/definitions/web.imageDTO'
       losses:
         type: integer
+      random:
+        description: Random marks an image selected by the smart endpoint's random
+          fallback.
+        type: boolean
       rank:
         type: integer
       rotated:
@@ -519,6 +528,10 @@ definitions:
         type: integer
       rotation:
         $ref: '#/definitions/web.rankRotationInfo'
+      source:
+        description: 'Source is set by the smart endpoint: day, week, month, year
+          or random.'
+        type: string
       time:
         type: string
       to:
@@ -2229,6 +2242,110 @@ paths:
           schema:
             $ref: '#/definitions/web.apiError'
       summary: Get the public ranking
+      tags:
+      - rank
+  /images/smart:
+    get:
+      description: 'Returns the strongest available ranking for the same filters:
+        day, then week, month, year, and finally random images when no ranking exists
+        at the requested offset.'
+      parameters:
+      - description: Page size (default 10, max 100)
+        in: query
+        name: amount
+        type: integer
+      - description: Pagination offset
+        in: query
+        name: offset
+        type: integer
+      - description: Vote mode name filter
+        in: query
+        name: mode
+        type: string
+      - description: Author filter
+        in: query
+        name: author
+        type: string
+      - description: Title regex filter
+        in: query
+        name: titleRegex
+        type: string
+      - description: Visibility filter
+        enum:
+        - all
+        - public
+        - private
+        in: query
+        name: visibility
+        type: string
+      - description: Public service name filter
+        in: query
+        name: service
+        type: string
+      - collectionFormat: csv
+        description: Uploader IDs or usernames (comma separated, 'me' allowed)
+        in: query
+        items:
+          type: string
+        name: uploadedBy
+        type: array
+      - description: Only images uploaded by the signed-in user
+        in: query
+        name: mine
+        type: boolean
+      - collectionFormat: csv
+        description: Author allow-list regexes
+        in: query
+        items:
+          type: string
+        name: includeAuthors
+        type: array
+      - collectionFormat: csv
+        description: Author deny-list regexes
+        in: query
+        items:
+          type: string
+        name: excludeAuthors
+        type: array
+      - collectionFormat: csv
+        description: Title allow-list regexes
+        in: query
+        items:
+          type: string
+        name: includeTitles
+        type: array
+      - collectionFormat: csv
+        description: Title deny-list regexes
+        in: query
+        items:
+          type: string
+        name: excludeTitles
+        type: array
+      - collectionFormat: csv
+        description: Image IDs to exclude from every ladder step
+        in: query
+        items:
+          type: string
+        name: exclude
+        type: array
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/web.rankResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/web.apiError'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/web.apiError'
+      security:
+      - BearerAuth: []
+      summary: Smart image feed with ranking fallback
       tags:
       - rank
   /rank/modes:

@@ -228,6 +228,19 @@ Rotation entries added from the library without votes are marked
 library is too small to meet the requested share, `satisfied` is `false` and
 the endpoint still returns as many different images as it can.
 
+### Smart fallback endpoint
+
+`GET /images/smart` is a separate path for clients that just want the best
+available content. It walks the ladder **day → week → month → year**, using the
+same filtering and visibility rules as `/images/rank` at every step. The first
+period with a non-empty page at the requested `offset` wins. If none exists, it
+returns a stable daily random page from the same eligible pool (honoring
+`offset`, `exclude`, visibility, uploader and regex filters).
+
+The response is the regular ranking envelope with an extra `source` field
+(`"day"`, `"week"`, `"month"`, `"year"` or `"random"`). Random fallback entries
+are marked `"random": true` and have zero vote stats.
+
 ## API overview
 
 All routes are under `/api/v1`. Responses are JSON except image bytes.
@@ -242,6 +255,7 @@ All routes are under `/api/v1`. Responses are JSON except image bytes.
 | GET | `/images/random?amount=2&author=&exclude=id,id` | Bare array of images. Also accepts the request filters below |
 | GET | `/images/author?author=Ada&amount=&offset=` | `{items, total, author}`; `author` may be empty when `uploadedBy`/`mine` is used |
 | GET | `/images/rank?time=day&amount=10&offset=0` | Ranked winners; also `seconds`, `from`, `to`, `author`, `titleRegex`, `mode`, `exclude`, `rotation`, `rotationPercent` |
+| GET | `/images/smart?amount=10&offset=0` | Smart ladder: day → week → month → year ranking, then stable random fallback. Uses the same filters as `/images/rank` |
 | GET | `/images/:id?format=webp|png|jpg&w=&h=&quality=&download=true&original=true` | Image bytes; default WebP capped to 1920px long edge / 1080p. `original=true` opts into the pristine upload |
 | GET | `/images/:id/meta` | Image metadata |
 | GET | `/rank/modes` | Available vote modes |

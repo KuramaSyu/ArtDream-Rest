@@ -102,6 +102,8 @@ export interface RankEntry {
   image: ImageItem;
   /** True when rank rotation added this deterministic fallback image. */
   rotated?: boolean;
+  /** True when the smart endpoint used its random fallback. */
+  random?: boolean;
 }
 
 export interface AdminRankEntry extends RankEntry {
@@ -161,8 +163,12 @@ export interface RankRotationInfo {
   satisfied: boolean;
 }
 
+export type RankSource = "day" | "week" | "month" | "year" | "random";
+
 export interface RankResponse {
   time: string;
+  /** Set by the smart endpoint to the ladder step that produced the page. */
+  source?: RankSource;
   from?: string;
   to?: string;
   amount: number;

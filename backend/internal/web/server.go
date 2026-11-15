@@ -34,6 +34,7 @@ func (s *Server) Router() *gin.Engine {
 	api.GET("/images/author", s.optionalAuth(), s.imagesByAuthor)
 	api.GET("/images/random", s.optionalAuth(), s.randomImages)
 	api.GET("/images/rank", s.optionalAuth(), s.rankImages)
+	api.GET("/images/smart", s.optionalAuth(), s.smartImages)
 	api.GET("/rank/modes", s.listVoteModes)
 	api.GET("/images/:id", s.serveImage)
 	api.GET("/images/:id/meta", s.imageMeta)

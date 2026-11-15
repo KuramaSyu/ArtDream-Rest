@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/rand"
 	"net/http"
 	"sort"
 	"strconv"
@@ -371,6 +372,8 @@ type rankEntry struct {
 	Image         imageDTO `json:"image"`
 	// Rotated marks a deterministic fallback image added by rank rotation.
 	Rotated bool `json:"rotated,omitempty"`
+	// Random marks an image selected by the smart endpoint's random fallback.
+	Random bool `json:"random,omitempty"`
 
 	// deranked is an internal sort key; it is never serialized publicly.
 	deranked bool
@@ -387,7 +390,9 @@ type rankRotationInfo struct {
 }
 
 type rankResponse struct {
-	Time       string            `json:"time"`
+	Time string `json:"time"`
+	// Source is set by the smart endpoint: day, week, month, year or random.
+	Source     string            `json:"source,omitempty"`
 	From       *string           `json:"from,omitempty"`
 	To         *string           `json:"to,omitempty"`
 	Amount     int               `json:"amount"`
@@ -1003,6 +1008,166 @@ func formatRangeTime(v *int64) *string {
 	}
 	formatted := time.Unix(*v, 0).UTC().Format(time.RFC3339)
 	return &formatted
+}
+
+// smartImages godoc
+// @Summary Smart image feed with ranking fallback
+// @Description Returns the strongest available ranking for the same filters: day, then week, month, year, and finally random images when no ranking exists at the requested offset.
+// @Tags rank
+// @Produce json
+// @Param amount query int false "Page size (default 10, max 100)"
+// @Param offset query int false "Pagination offset"
+// @Param mode query string false "Vote mode name filter"
+// @Param author query string false "Author filter"
+// @Param titleRegex query string false "Title regex filter"
+// @Param visibility query string false "Visibility filter" Enums(all, public, private)
+// @Param service query string false "Public service name filter"
+// @Param uploadedBy query []string false "Uploader IDs or usernames (comma separated, 'me' allowed)" collectionFormat(csv)
+// @Param mine query bool false "Only images uploaded by the signed-in user"
+// @Param includeAuthors query []string false "Author allow-list regexes" collectionFormat(csv)
+// @Param excludeAuthors query []string false "Author deny-list regexes" collectionFormat(csv)
+// @Param includeTitles query []string false "Title allow-list regexes" collectionFormat(csv)
+// @Param excludeTitles query []string false "Title deny-list regexes" collectionFormat(csv)
+// @Param exclude query []string false "Image IDs to exclude from every ladder step" collectionFormat(csv)
+// @Success 200 {object} rankResponse
+// @Failure 400 {object} apiError
+// @Failure 500 {object} apiError
+// @Security BearerAuth
+// @Router /images/smart [get]
+func (s *Server) smartImages(c *gin.Context) {
+	amount := parseAmount(c, 10, 100)
+	offset := parseOffset(c)
+	now := time.Now().UTC()
+	ctx := c.Request.Context()
+
+	cfg, err := s.Store.GetAppConfig(ctx)
+	if err != nil {
+		serverError(c, err)
+		return
+	}
+	req, err := imageRequestFromQuery(c)
+	if err != nil {
+		badRequest(c, err.Error())
+		return
+	}
+	policy, err := store.CompileImageRequest(cfg, req)
+	if err != nil {
+		asStoreError(c, err)
+		return
+	}
+	modRows, err := moderationRows(c)
+	if err != nil {
+		serverError(c, err)
+		return
+	}
+	exclude := excludeIDSet(c)
+	baseFilter := store.VoteFilter{
+		Mode:       trimTo(c.Query("mode"), 64),
+		Author:     trimTo(c.Query("author"), 120),
+		TitleRegex: trimTo(c.Query("titleRegex"), 200),
+		Limit:      -1,
+	}
+
+	for _, label := range []string{"day", "week", "month", "year"} {
+		rng := rollingRangeForLabel(label, now)
+		window := store.ModerationWindowForLabel(label)
+		entries, totalVotes, err := s.rankEntriesForWindow(ctx, rng, baseFilter, policy, modRows, window, exclude)
+		if err != nil {
+			asStoreError(c, err)
+			return
+		}
+		page := sliceRankEntries(entries, offset, amount)
+		if len(page) == 0 {
+			continue
+		}
+		for i := range page {
+			page[i].Rank = offset + i + 1
+		}
+		resp := rankResponse{
+			Time:       label,
+			Source:     label,
+			From:       formatRangeTime(rng.From),
+			To:         formatRangeTime(rng.To),
+			Amount:     amount,
+			Offset:     offset,
+			Total:      len(entries),
+			TotalVotes: totalVotes,
+			Winners:    page,
+		}
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+
+	// No ranking exists even for the whole year: return a stable daily random
+	// page that still honors the same filters, exclusions and pagination.
+	pool, err := s.rankCandidatePool(ctx, c, req, cfg, policy, modRows, store.ModerationAll, exclude)
+	if err != nil {
+		serverError(c, err)
+		return
+	}
+	page := smartRandomPage(pool, now, offset, amount)
+	for i := range page {
+		page[i].Rank = offset + i + 1
+	}
+	c.JSON(http.StatusOK, rankResponse{
+		Time:    "random",
+		Source:  "random",
+		Amount:  amount,
+		Offset:  offset,
+		Total:   len(pool),
+		Winners: page,
+	})
+}
+
+func rollingRangeForLabel(label string, now time.Time) rangeWindow {
+	to := now.Unix()
+	var from int64
+	switch strings.ToLower(strings.TrimSpace(label)) {
+	case "day":
+		from = now.Add(-rangeDay).Unix()
+	case "week":
+		from = now.Add(-rangeWeek).Unix()
+	case "month":
+		from = now.Add(-rangeMonth).Unix()
+	case "year":
+		from = now.Add(-rangeYear).Unix()
+	default:
+		from = 0
+	}
+	return rangeWindow{Label: label, From: &from, To: &to}
+}
+
+func smartRandomPage(pool []store.Image, now time.Time, offset, amount int) []rankEntry {
+	if len(pool) == 0 || offset < 0 || offset >= len(pool) || amount <= 0 {
+		return []rankEntry{}
+	}
+	shuffled := append([]store.Image(nil), pool...)
+	// Stable per UTC day: a page keeps its order during the day, while the
+	// random fallback gets a fresh order tomorrow.
+	seed := now.Unix() / int64((24 * time.Hour).Seconds())
+	random := rand.New(rand.NewSource(seed))
+	random.Shuffle(len(shuffled), func(i, j int) {
+		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
+	})
+
+	window := rollingRangeForLabel("day", now)
+	ordered := rotationOrder(shuffled, window, amount, offset)
+	limit := amount
+	if remaining := len(pool) - offset; limit > remaining {
+		limit = remaining
+	}
+	if limit > len(ordered) {
+		limit = len(ordered)
+	}
+	out := make([]rankEntry, 0, limit)
+	for i := 0; i < limit; i++ {
+		img := &ordered[i]
+		entry := syntheticRankEntry(img)
+		entry.Rotated = false
+		entry.Random = true
+		out = append(out, entry)
+	}
+	return out
 }
 
 func (s *Server) myVotes(c *gin.Context) {

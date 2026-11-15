@@ -193,6 +193,26 @@ export const api = {
       },
     }),
 
+  smartImages: (query: RankQuery = {}) =>
+    request<RankResponse>("/images/smart", {
+      query: {
+        amount: query.amount,
+        offset: query.offset,
+        author: query.author,
+        titleRegex: query.titleRegex,
+        mode: query.mode,
+        visibility: query.visibility,
+        service: query.service,
+        uploadedBy: query.uploadedBy,
+        mine: query.mine,
+        includeAuthors: query.includeAuthors,
+        excludeAuthors: query.excludeAuthors,
+        includeTitles: query.includeTitles,
+        excludeTitles: query.excludeTitles,
+        exclude: query.exclude,
+      },
+    }),
+
   modes: () => request<VoteMode[]>("/rank/modes"),
 
   vote: (body: VotePayload) =>

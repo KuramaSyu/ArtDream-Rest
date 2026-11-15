@@ -2295,6 +2295,158 @@ const docTemplate = `{
                 }
             }
         },
+        "/images/smart": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns the strongest available ranking for the same filters: day, then week, month, year, and finally random images when no ranking exists at the requested offset.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "rank"
+                ],
+                "summary": "Smart image feed with ranking fallback",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Page size (default 10, max 100)",
+                        "name": "amount",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Pagination offset",
+                        "name": "offset",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Vote mode name filter",
+                        "name": "mode",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Author filter",
+                        "name": "author",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Title regex filter",
+                        "name": "titleRegex",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "all",
+                            "public",
+                            "private"
+                        ],
+                        "type": "string",
+                        "description": "Visibility filter",
+                        "name": "visibility",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Public service name filter",
+                        "name": "service",
+                        "in": "query"
+                    },
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "csv",
+                        "description": "Uploader IDs or usernames (comma separated, 'me' allowed)",
+                        "name": "uploadedBy",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Only images uploaded by the signed-in user",
+                        "name": "mine",
+                        "in": "query"
+                    },
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "csv",
+                        "description": "Author allow-list regexes",
+                        "name": "includeAuthors",
+                        "in": "query"
+                    },
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "csv",
+                        "description": "Author deny-list regexes",
+                        "name": "excludeAuthors",
+                        "in": "query"
+                    },
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "csv",
+                        "description": "Title allow-list regexes",
+                        "name": "includeTitles",
+                        "in": "query"
+                    },
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "csv",
+                        "description": "Title deny-list regexes",
+                        "name": "excludeTitles",
+                        "in": "query"
+                    },
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "csv",
+                        "description": "Image IDs to exclude from every ladder step",
+                        "name": "exclude",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/web.rankResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/web.apiError"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/web.apiError"
+                        }
+                    }
+                }
+            }
+        },
         "/images/{id}": {
             "get": {
                 "description": "Serves a rendered variant by default (WebP, capped at 1920px long edge / 1080px tall). Use original=true for the pristine upload.",
@@ -3017,6 +3169,13 @@ const docTemplate = `{
                     "type": "string",
                     "example": "all"
                 },
+                "rankRotationEnabled": {
+                    "type": "boolean"
+                },
+                "rankRotationPercent": {
+                    "type": "integer",
+                    "example": 60
+                },
                 "rankingAnonymized": {
                     "type": "boolean"
                 },
@@ -3526,6 +3685,10 @@ const docTemplate = `{
                 "losses": {
                     "type": "integer"
                 },
+                "random": {
+                    "description": "Random marks an image selected by the smart endpoint's random fallback.",
+                    "type": "boolean"
+                },
                 "rank": {
                     "type": "integer"
                 },
@@ -3634,6 +3797,10 @@ const docTemplate = `{
                 },
                 "rotation": {
                     "$ref": "#/definitions/web.rankRotationInfo"
+                },
+                "source": {
+                    "description": "Source is set by the smart endpoint: day, week, month, year or random.",
+                    "type": "string"
                 },
                 "time": {
                     "type": "string"
