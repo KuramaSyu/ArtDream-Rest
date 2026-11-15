@@ -348,7 +348,6 @@ export function RankPage() {
   const [picked, setPicked] = useState<Side | null>(null);
   const [activeZone, setActiveZone] = useState<number | null>(null);
   const [zonePreviewOpen, setZonePreviewOpen] = useState(false);
-  const [castCount, setCastCount] = useState(0);
   const [reloadTick, setReloadTick] = useState(0);
   const [fullscreen, setFullscreen] = useState<ImageItem | null>(null);
   const [fullscreenLoaded, setFullscreenLoaded] = useState(false);
@@ -488,7 +487,6 @@ export function RankPage() {
         await api.vote(votePayload);
         markLocalRankingSynced(localEntry.localId, Boolean(user));
         recent.current = [left.id, right.id, ...recent.current.filter((id) => id !== left.id && id !== right.id)].slice(0, 12);
-        setCastCount((count) => count + 1);
         const mid = ((payload.minValue ?? 0) + (payload.maxValue ?? 0)) / 2;
         const isTie =
           payload.value === undefined || Math.abs(payload.value - mid) < 1;
@@ -614,17 +612,6 @@ export function RankPage() {
         }}
       >
         <Box>
-          {/* <Box
-            sx={{
-              fontSize: "0.72rem",
-              letterSpacing: "0.22em",
-              textTransform: "uppercase",
-              opacity: 0.6,
-              mb: 0.7,
-            }}
-          >
-            {castCount > 0 ? `${castCount} verdict${castCount === 1 ? "" : "s"} cast` : "a duel of dreams"}
-          </Box> */}
           <Typography
             className="display"
             sx={{
