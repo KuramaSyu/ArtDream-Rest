@@ -991,41 +991,6 @@ export function RankPage() {
                   </Box>
                 )}
 
-                {activeZone !== null && !zonePreviewOpen && (
-                  <Box
-                    aria-hidden
-                    sx={{
-                      position: "absolute",
-                      pointerEvents: "none",
-                      zIndex: 1,
-                      left: { xs: `${(activeZone - 1) * 20}%`, md: 0 },
-                      top: { xs: 0, md: `${(activeZone - 1) * 20}%` },
-                      width: { xs: "20%", md: "100%" },
-                      height: { xs: "100%", md: "20%" },
-                      border: "1px solid rgba(255,255,255,.24)",
-                      background: "rgba(255,255,255,.035)",
-                      borderRadius: 2,
-                      transition: "left 130ms ease, top 130ms ease",
-                    }}
-                  >
-                    <Box
-                      sx={{
-                        position: "absolute",
-                        top: 10,
-                        left: 10,
-                        px: 0.8,
-                        py: 0.25,
-                        borderRadius: 1,
-                        background: "rgba(10,9,15,.62)",
-                        color: "rgba(255,255,255,.8)",
-                        fontSize: "0.66rem",
-                        letterSpacing: "0.08em",
-                      }}
-                    >
-                      {activeZone}/5
-                    </Box>
-                  </Box>
-                )}
               </Box>
             </motion.div>
           </AnimatePresence>
