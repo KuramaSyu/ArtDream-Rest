@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import {
   Alert,
   Box,
@@ -77,8 +77,11 @@ export function LandingPage() {
   const [qualityMenu, setQualityMenu] = useState<HTMLElement | null>(null);
 
   const needsSetup = status === "ready" && needsBootstrap;
-  const slideUrls = useMemo(() => slides.map((slide) => slide.url), [slides]);
-  useStageImages(slideUrls);
+  const current = slides[index];
+  // Feed only the artwork that is actually on screen. The theme host then
+  // rebuilds the palette on every slide switch instead of picking one image
+  // from the whole slideshow once.
+  useStageImages(current ? [current.url] : []);
 
   useEffect(() => {
     let cancelled = false;
@@ -149,7 +152,6 @@ export function LandingPage() {
     return () => window.removeEventListener("keydown", handler);
   }, [goToSlide]);
 
-  const current = slides[index];
   const currentAuthorHidden = frontendConfigLoading || rankingAnonymized;
   const backgroundSrc = current
     ? quality === "original"
