@@ -20,6 +20,7 @@ import {
   CloudUploadOutlined,
   HighQualityRounded,
   LoginRounded,
+  SlideshowRounded,
   TodayRounded,
   Visibility,
   VisibilityOff,
@@ -48,6 +49,27 @@ const HOME_QUALITIES: Array<{ value: HomeQuality; label: string }> = [
   { value: "1440", label: "1440p · sharper" },
   { value: "original", label: "Original · largest" },
 ];
+
+type HomeSlideCount = 8 | 20 | 40 | 100;
+const HOME_SLIDES_KEY = "artdream.homeSlides.v1";
+const HOME_SLIDE_COUNTS: Array<{ value: HomeSlideCount; label: string }> = [
+  { value: 8, label: "8 · default" },
+  { value: 20, label: "20" },
+  { value: 40, label: "40" },
+  { value: 100, label: "100 · all top places" },
+];
+
+function readHomeSlideCount(): HomeSlideCount {
+  try {
+    const stored = Number(localStorage.getItem(HOME_SLIDES_KEY));
+    if (stored === 8 || stored === 20 || stored === 40 || stored === 100) {
+      return stored;
+    }
+  } catch {
+    // ignore storage restrictions
+  }
+  return 8;
+}
 
 function readHomeQuality(): HomeQuality {
   try {
@@ -81,6 +103,8 @@ export function LandingPage() {
   const [reloadToken, setReloadToken] = useState(0);
   const [quality, setQuality] = useState<HomeQuality>(readHomeQuality);
   const [qualityMenu, setQualityMenu] = useState<HTMLElement | null>(null);
+  const [slideCount, setSlideCount] = useState<HomeSlideCount>(readHomeSlideCount);
+  const [slidesMenu, setSlidesMenu] = useState<HTMLElement | null>(null);
 
   const needsSetup = status === "ready" && needsBootstrap;
   const current = slides[index];
@@ -96,14 +120,16 @@ export function LandingPage() {
       try {
         const ranking = await api.rank({
           time: period,
-          amount: 8,
+          amount: slideCount,
           todayOnly: todayOnly || undefined,
         });
         const ranked = ranking.winners.map((winner) => winner.image);
         // An empty "today only" ranking means there is nothing from today to
         // show; falling back to random images would break that filter.
         const images =
-          ranked.length === 0 && !todayOnly ? await api.randomImages(8) : ranked;
+          ranked.length === 0 && !todayOnly
+            ? await api.randomImages(Math.min(slideCount, 50))
+            : ranked;
         if (!cancelled) {
           setSlides(images);
           setIndex(0);
@@ -117,7 +143,7 @@ export function LandingPage() {
     return () => {
       cancelled = true;
     };
-  }, [period, todayOnly, reloadToken]);
+  }, [period, todayOnly, reloadToken, slideCount]);
 
   useEffect(() => {
     if (slides.length < 2) return;
@@ -172,6 +198,17 @@ export function LandingPage() {
     setQualityMenu(null);
     try {
       localStorage.setItem(HOME_QUALITY_KEY, next);
+    } catch {
+      // ignore storage restrictions
+    }
+  };
+
+  const chooseSlideCount = (next: HomeSlideCount) => {
+    setSlideCount(next);
+    setSlidesMenu(null);
+    setIndex(0);
+    try {
+      localStorage.setItem(HOME_SLIDES_KEY, String(next));
     } catch {
       // ignore storage restrictions
     }
@@ -499,6 +536,36 @@ export function LandingPage() {
                 Today
               </ThemeButton>
             </Tooltip>
+            <Tooltip
+              title={`Slideshow length — ${slideCount} top artworks`}
+              enterDelay={400}
+            >
+              <ThemeButton
+                tone="pill"
+                size="small"
+                onClick={(event) => setSlidesMenu(event.currentTarget)}
+                startIcon={<SlideshowRounded sx={{ fontSize: 16 }} />}
+              >
+                {slideCount}
+              </ThemeButton>
+            </Tooltip>
+            <Menu
+              anchorEl={slidesMenu}
+              open={Boolean(slidesMenu)}
+              onClose={() => setSlidesMenu(null)}
+              anchorOrigin={{ vertical: "top", horizontal: "center" }}
+              transformOrigin={{ vertical: "bottom", horizontal: "center" }}
+            >
+              {HOME_SLIDE_COUNTS.map((option) => (
+                <MenuItem
+                  key={option.value}
+                  selected={slideCount === option.value}
+                  onClick={() => chooseSlideCount(option.value)}
+                >
+                  {option.label}
+                </MenuItem>
+              ))}
+            </Menu>
             <Tooltip
               title={`Backdrop resolution — ${quality === "original" ? "original" : `${quality}p`}`}
               enterDelay={400}
