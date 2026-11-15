@@ -223,21 +223,6 @@ export function LandingPage() {
             </motion.div>
           )}
         </AnimatePresence>
-        {/* Tint the slideshow with the palette of the current image. The
-            theme wash itself sits behind this full-bleed background, so
-            without this layer only small controls would show the change. */}
-        <Box
-          sx={{
-            position: "absolute",
-            inset: 0,
-            pointerEvents: "none",
-            background: `
-              radial-gradient(1100px 760px at 16% 8%, ${alpha(primary, 0.42)} 0%, transparent 62%),
-              radial-gradient(950px 820px at 88% 32%, ${alpha(secondary, 0.34)} 0%, transparent 66%),
-              linear-gradient(155deg, ${alpha(theme.palette.primary.dark, 0.22)} 0%, transparent 52%, ${alpha(theme.palette.secondary.dark, 0.26)} 100%)
-            `,
-          }}
-        />
         {!current && (
           <Box
             sx={{

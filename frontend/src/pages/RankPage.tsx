@@ -570,16 +570,16 @@ export function RankPage() {
             : null;
         notify(
           isTie
-            ? "A draw. Both keep their dignity."
+            ? "Draw."
             : fiveRelative !== null
               ? fiveRelative < 0.01
-                ? "Left, unmistakably."
+                ? "Left wins."
                 : fiveRelative < 0.5
-                  ? "Left got a gentle nod."
+                  ? "Left, barely."
                   : fiveRelative > 0.99
-                    ? "Right, unmistakably."
-                    : "Right got a gentle nod."
-              : "Verdict sealed.",
+                    ? "Right wins."
+                    : "Right, barely."
+              : "Saved.",
           "success",
         );
         await sleep(430);
