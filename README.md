@@ -192,6 +192,42 @@ Instagram pieces, or pairs from you and a few friends while the global admin
 rules still apply. Direct image bytes/meta requests stay addressable by id so
 shared links and the admin UI keep working.
 
+### Rank rotation (quiet periods)
+
+The admin panel can enable **rank rotation** and set a minimum change share
+(default `60%`). When enabled, `/images/rank` computes the previous equivalent
+period (day→previous day, week→previous week, custom→previous custom-sized
+window) with exactly the same endpoint filters, including author, title regex,
+mode, visibility, service, uploader, regex allow/deny lists and `exclude` ids.
+If fewer than the configured share of the current page differs, the response is
+filled or replaced with a deterministic, window-seeded selection of eligible
+images. This keeps a quiet day from showing the same artwork as the day before,
+and it also fills a completely empty ranking when nobody voted.
+
+Per-request overrides: `rotation=true|false` (alias `rankRotation`) and
+`rotationPercent=0..100` (aliases `rankRotationPercent`, `changePercent`).
+`exclude=id,id` removes images from both periods and from rotation candidates.
+The response includes optional `rotation` metadata:
+
+```json
+{
+  "rotation": {
+    "enabled": true,
+    "percent": 60,
+    "required": 6,
+    "changed": 6,
+    "satisfied": true,
+    "previousFrom": "...",
+    "previousTo": "..."
+  }
+}
+```
+
+Rotation entries added from the library without votes are marked
+`"rotated": true` and naturally sort below real ranked entries. If the eligible
+library is too small to meet the requested share, `satisfied` is `false` and
+the endpoint still returns as many different images as it can.
+
 ## API overview
 
 All routes are under `/api/v1`. Responses are JSON except image bytes.
@@ -205,7 +241,7 @@ All routes are under `/api/v1`. Responses are JSON except image bytes.
 | GET | `/frontend-config` | Server-backed display config, e.g. `{rankingAnonymized, defaultImageVisibility}` |
 | GET | `/images/random?amount=2&author=&exclude=id,id` | Bare array of images. Also accepts the request filters below |
 | GET | `/images/author?author=Ada&amount=&offset=` | `{items, total, author}`; `author` may be empty when `uploadedBy`/`mine` is used |
-| GET | `/images/rank?time=day&amount=10&offset=0` | Ranked winners; also `seconds`, `from`, `to`, `author`, `titleRegex`, `mode` |
+| GET | `/images/rank?time=day&amount=10&offset=0` | Ranked winners; also `seconds`, `from`, `to`, `author`, `titleRegex`, `mode`, `exclude`, `rotation`, `rotationPercent` |
 | GET | `/images/:id?format=webp|png|jpg&w=&h=&quality=&download=true&original=true` | Image bytes; default WebP capped to 1920px long edge / 1080p. `original=true` opts into the pristine upload |
 | GET | `/images/:id/meta` | Image metadata |
 | GET | `/rank/modes` | Available vote modes |
@@ -306,7 +342,7 @@ Vote request (flexible key spellings are accepted — `leftImageId`, `left-img`,
 | POST | `/admin/rank/modes` | Create mode |
 | PATCH | `/admin/rank/modes/:id` | Update mode |
 | DELETE | `/admin/rank/modes/:id` | Delete mode (blocked while votes use it) |
-| PATCH | `/admin/frontend-config` | `{rankingAnonymized, defaultImageVisibility}` — global ranking author masking and the fallback public/private image-request mode |
+| PATCH | `/admin/frontend-config` | `{rankingAnonymized, defaultImageVisibility, rankRotationEnabled, rankRotationPercent}` — global ranking author masking, fallback public/private mode, and quiet-period rotation |
 
 Admin filter example — delete all votes from the last week for author “Ada”
 with titles matching `/green/i`:
@@ -327,14 +363,18 @@ curl -X DELETE \
   corner next to a small backdrop-resolution menu (720p / 1080p / 1440p /
   original). With no votes yet it falls back to random images.
 - **Rank:** two images shown at 720p, with a fullscreen button for a larger
-  view. Click one for a gentle 2/5 or 4/5 vote, hover to nudge the long slider,
-  or drag the 1–100 slider yourself. On desktop, keyboard hints are shown below
-  the slider: `1`–`5` submit the five-point scale (1 clearly left, 3 even,
-  5 clearly right), arrow keys make a soft left/right pick, and Enter submits
-  the slider. Those hints are hidden on mobile, which keeps the tap-and-slide
-  instructions. `Skip pair` avoids the current pair. The **Source** button
-  opens request filters for public/private provenance, service name, uploader
-  usernames/ids, and extra author/title allow/deny regexes.
+  view. Entering the page shows a preview sheet with the five scoring zones
+  until it is dismissed. The image area is an invisible five-zone grid: on
+  desktop it is five vertical columns; on mobile it is five horizontal rows
+  (matching the stacked images). Hovering a desktop zone marks the matching
+  button below; clicking/tapping an area casts the 1–5 vote (1/2 highlight the
+  left image, 4/5 the right, 3 is a draw). The active zone and matching number
+  are highlighted, and the five buttons (columns on desktop, rows on mobile)
+  are directly clickable. Keyboard hints remain on desktop: `1`–`5` submit the
+  five-point scale and arrow keys make a soft left/right pick. `Skip pair`
+  avoids the current pair. The **Source** button opens request filters for
+  public/private provenance, service name, uploader usernames/ids, and extra
+  author/title allow/deny regexes.
 - **Admin:** ranking (exact numbers for any period, per-period hide/derank,
   score rank vs displayed rank), votes (filters, edit, delete, bulk delete),
   images (edit, delete, bulk delete), people (create, edit, grant/revoke admin,

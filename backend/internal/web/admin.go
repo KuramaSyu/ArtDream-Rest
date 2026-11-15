@@ -10,6 +10,31 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// listVotesAdmin godoc
+// @Summary List votes (admin)
+// @Description Lists votes with the shared admin filters, including images that were deleted after the vote.
+// @Tags admin
+// @Security BearerAuth
+// @Produce json
+// @Param time query string false "Time window" Enums(day, week, month, year, all, custom)
+// @Param seconds query int false "Custom window size in seconds (when time=custom)"
+// @Param from query string false "Custom range start (RFC3339 or unix seconds)"
+// @Param to query string false "Custom range end (RFC3339 or unix seconds)"
+// @Param amount query int false "Page size (default 50, max 500)"
+// @Param offset query int false "Pagination offset"
+// @Param user query string false "Voting username filter"
+// @Param username query string false "Alias for user"
+// @Param mode query string false "Vote mode name filter"
+// @Param imageId query string false "Image ID that must appear in the vote"
+// @Param author query string false "Author filter"
+// @Param authorName query string false "Alias for author"
+// @Param titleRegex query string false "Title regex filter"
+// @Success 200 {object} AdminVoteListResponse
+// @Failure 400 {object} apiError
+// @Failure 401 {object} apiError
+// @Failure 403 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /admin/votes [get]
 func (s *Server) listVotesAdmin(c *gin.Context) {
 	vf, _, rng, err := filterFromQuery(c)
 	if err != nil {
@@ -34,6 +59,22 @@ func (s *Server) listVotesAdmin(c *gin.Context) {
 	})
 }
 
+// updateVoteAdmin godoc
+// @Summary Update a vote (admin)
+// @Description Reassigns images or changes the mode/outcome of a vote. The body accepts the same fields and aliases as POST /rank/vote.
+// @Tags admin
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path int true "Vote ID"
+// @Param payload body VotePayload true "Vote fields to update"
+// @Success 200 {object} VoteDTO
+// @Failure 400 {object} apiError
+// @Failure 401 {object} apiError
+// @Failure 403 {object} apiError
+// @Failure 404 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /admin/votes/{id} [patch]
 func (s *Server) updateVoteAdmin(c *gin.Context) {
 	id, ok := parseIDParam(c, "id")
 	if !ok {
@@ -167,6 +208,19 @@ func (s *Server) updateVoteAdmin(c *gin.Context) {
 	c.JSON(http.StatusOK, voteToDTO(v, images))
 }
 
+// deleteVoteAdmin godoc
+// @Summary Delete a vote (admin)
+// @Tags admin
+// @Security BearerAuth
+// @Produce json
+// @Param id path int true "Vote ID"
+// @Success 200 {object} DeleteVoteResponse
+// @Failure 400 {object} apiError
+// @Failure 401 {object} apiError
+// @Failure 403 {object} apiError
+// @Failure 404 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /admin/votes/{id} [delete]
 func (s *Server) deleteVoteAdmin(c *gin.Context) {
 	id, ok := parseIDParam(c, "id")
 	if !ok {
@@ -179,6 +233,28 @@ func (s *Server) deleteVoteAdmin(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"deleted": id})
 }
 
+// bulkDeleteVotesAdmin godoc
+// @Summary Bulk delete votes (admin)
+// @Description Deletes the votes named by ids, or every vote matching the shared admin filters when ids is omitted.
+// @Tags admin
+// @Security BearerAuth
+// @Produce json
+// @Param ids query []string false "Explicit vote IDs; takes precedence over the filters" collectionFormat(csv)
+// @Param time query string false "Time window" Enums(day, week, month, year, all, custom)
+// @Param seconds query int false "Custom window size in seconds (when time=custom)"
+// @Param from query string false "Custom range start (RFC3339 or unix seconds)"
+// @Param to query string false "Custom range end (RFC3339 or unix seconds)"
+// @Param user query string false "Voting username filter"
+// @Param mode query string false "Vote mode name filter"
+// @Param imageId query string false "Image ID that must appear in the vote"
+// @Param author query string false "Author filter"
+// @Param titleRegex query string false "Title regex filter"
+// @Success 200 {object} DeleteCountResponse
+// @Failure 400 {object} apiError
+// @Failure 401 {object} apiError
+// @Failure 403 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /admin/votes [delete]
 func (s *Server) bulkDeleteVotesAdmin(c *gin.Context) {
 	vf, _, _, err := filterFromQuery(c)
 	if err != nil {
@@ -236,6 +312,20 @@ type voteModeRequest struct {
 	IsBinary    *bool   `json:"isBinary"`
 }
 
+// createVoteMode godoc
+// @Summary Create a vote mode (admin)
+// @Tags admin
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param payload body voteModeRequest true "Mode definition"
+// @Success 201 {object} store.VoteMode
+// @Failure 400 {object} apiError
+// @Failure 401 {object} apiError
+// @Failure 403 {object} apiError
+// @Failure 409 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /admin/rank/modes [post]
 func (s *Server) createVoteMode(c *gin.Context) {
 	var req voteModeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -276,6 +366,22 @@ func (s *Server) createVoteMode(c *gin.Context) {
 	c.JSON(http.StatusCreated, mode)
 }
 
+// updateVoteMode godoc
+// @Summary Update a vote mode (admin)
+// @Tags admin
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path int true "Vote mode ID"
+// @Param payload body voteModeRequest true "Fields to update"
+// @Success 200 {object} store.VoteMode
+// @Failure 400 {object} apiError
+// @Failure 401 {object} apiError
+// @Failure 403 {object} apiError
+// @Failure 404 {object} apiError
+// @Failure 409 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /admin/rank/modes/{id} [patch]
 func (s *Server) updateVoteMode(c *gin.Context) {
 	id, ok := parseIDParam(c, "id")
 	if !ok {
@@ -323,6 +429,21 @@ func (s *Server) updateVoteMode(c *gin.Context) {
 	c.JSON(http.StatusOK, mode)
 }
 
+// deleteVoteMode godoc
+// @Summary Delete a vote mode (admin)
+// @Description Refuses to delete a mode that still has votes.
+// @Tags admin
+// @Security BearerAuth
+// @Produce json
+// @Param id path int true "Vote mode ID"
+// @Success 200 {object} DeleteVoteResponse
+// @Failure 400 {object} apiError
+// @Failure 401 {object} apiError
+// @Failure 403 {object} apiError
+// @Failure 404 {object} apiError
+// @Failure 409 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /admin/rank/modes/{id} [delete]
 func (s *Server) deleteVoteMode(c *gin.Context) {
 	id, ok := parseIDParam(c, "id")
 	if !ok {

@@ -540,11 +540,6 @@ export class CustomThemeImpl implements CustomTheme {
           elevation: 2,
         },
       },
-      MuiSlider: {
-        styleOverrides: {
-          ...this.colorTransition,
-        },
-      },
       MuiButtonBase: {
         styleOverrides: {
           ...RootColorAndRadius,

@@ -252,38 +252,6 @@ a {
   animation: float-slow 16s ease-in-out infinite;
 }
 
-.slider-track-gradient .MuiSlider-rail {
-  background: linear-gradient(
-    90deg,
-    rgba(255, 255, 255, 0.2),
-    rgba(255, 255, 255, 0.08) 48%,
-    rgba(255, 255, 255, 0.08) 52%,
-    rgba(255, 255, 255, 0.2)
-  );
-  opacity: 1;
-  height: 10px;
-  border-radius: 99px;
-}
-
-.slider-track-gradient .MuiSlider-track {
-  height: 10px;
-  border-radius: 99px;
-  border: none;
-  background: var(--ad-slider-gradient, linear-gradient(90deg, #8fbcbb, #b48ead));
-}
-
-.slider-track-gradient .MuiSlider-thumb {
-  width: 26px;
-  height: 26px;
-  border: 3px solid rgba(255, 255, 255, 0.9);
-  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
-}
-
-.slider-track-gradient .MuiSlider-thumb:hover,
-.slider-track-gradient .MuiSlider-thumb.Mui-focusVisible {
-  box-shadow: 0 0 0 10px rgba(255, 255, 255, 0.08), 0 6px 22px rgba(0, 0, 0, 0.45);
-}
-
 .rank-image-card {
   cursor: pointer;
   outline: none;

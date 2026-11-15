@@ -123,7 +123,7 @@ export function LandingPage() {
       if (
         target?.isContentEditable ||
         target?.closest(
-          'input, textarea, select, [role="combobox"], [role="listbox"], [role="slider"], .MuiSlider-root',
+          'input, textarea, select, [role="combobox"], [role="listbox"]',
         )
       ) {
         return;

@@ -97,12 +97,18 @@ type AppConfig struct {
 	RankingAnonymized bool `json:"rankingAnonymized"`
 	// DefaultImageVisibility is the fallback when an image request omits the
 	// visibility parameter. It is one of "all", "public" or "private".
-	DefaultImageVisibility string    `json:"defaultImageVisibility"`
-	ExcludeAuthors         []string  `json:"excludeAuthors"`
-	ExcludeTitles          []string  `json:"excludeTitles"`
-	IncludeAuthors         []string  `json:"includeAuthors"`
-	IncludeTitles          []string  `json:"includeTitles"`
-	UpdatedAt              time.Time `json:"updatedAt"`
+	DefaultImageVisibility string `json:"defaultImageVisibility"`
+	// RankRotationEnabled makes /images/rank replace part of a period's result
+	// with a different, deterministic selection so repeated quiet periods do
+	// not show the exact same images. RankRotationPercent is the minimum share
+	// (0-100) of the returned page that should differ from the previous period.
+	RankRotationEnabled bool      `json:"rankRotationEnabled"`
+	RankRotationPercent int       `json:"rankRotationPercent"`
+	ExcludeAuthors      []string  `json:"excludeAuthors"`
+	ExcludeTitles       []string  `json:"excludeTitles"`
+	IncludeAuthors      []string  `json:"includeAuthors"`
+	IncludeTitles       []string  `json:"includeTitles"`
+	UpdatedAt           time.Time `json:"updatedAt"`
 }
 
 // VoteFilter narrows a vote listing. Author and TitleRegex are matched

@@ -43,6 +43,22 @@ type claimRequest struct {
 	claimItem
 }
 
+// uploadImage godoc
+// @Summary Upload an image
+// @Description Accepts a landscape image (JPEG, PNG, GIF, WebP, BMP, TIFF). Authentication is optional: anonymous uploads receive a claimToken that can later attach the image to an account.
+// @Tags images
+// @Accept multipart/form-data
+// @Produce json
+// @Param image formData file true "Image file (the `file` field is also accepted)"
+// @Param author formData string true "Artist/author name"
+// @Param title formData string false "Title"
+// @Param fromPublicService formData bool false "Image comes from a public service"
+// @Param serviceName formData string false "Public service name"
+// @Success 201 {object} uploadResponse
+// @Failure 400 {object} apiError
+// @Failure 413 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /images [post]
 func (s *Server) uploadImage(c *gin.Context) {
 	user := currentUser(c)
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, s.MaxUploadBytes)
@@ -170,6 +186,19 @@ func (s *Server) uploadImage(c *gin.Context) {
 
 // claimImages links images uploaded anonymously from this device to the
 // signed-in account. Clients send the claim tokens returned at upload time.
+// claimImages godoc
+// @Summary Claim anonymous uploads
+// @Description Attaches images uploaded anonymously from this device to the signed-in account using their claim tokens.
+// @Tags images
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param payload body claimRequest true "One or more image ID/claim-token pairs"
+// @Success 200 {object} ClaimResponse
+// @Failure 400 {object} apiError
+// @Failure 401 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /images/claim [post]
 func (s *Server) claimImages(c *gin.Context) {
 	user := currentUser(c)
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64<<10)
@@ -243,6 +272,27 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+// imagesByAuthor godoc
+// @Summary List images by author
+// @Description Lists images for one author, or across artists when uploadedBy/mine is supplied. Authentication is optional but required for mine/uploadedBy=me.
+// @Tags images
+// @Produce json
+// @Param author query string false "Author name (required unless uploadedBy/mine is set)"
+// @Param amount query int false "Page size (default 100, max 500)"
+// @Param offset query int false "Pagination offset"
+// @Param visibility query string false "Visibility filter" Enums(all, public, private)
+// @Param service query string false "Public service name filter"
+// @Param uploadedBy query []string false "Uploader IDs or usernames (comma separated, 'me' allowed)" collectionFormat(csv)
+// @Param mine query bool false "Only images uploaded by the signed-in user"
+// @Param includeAuthors query []string false "Author allow-list regexes" collectionFormat(csv)
+// @Param excludeAuthors query []string false "Author deny-list regexes" collectionFormat(csv)
+// @Param includeTitles query []string false "Title allow-list regexes" collectionFormat(csv)
+// @Param excludeTitles query []string false "Title deny-list regexes" collectionFormat(csv)
+// @Success 200 {object} AuthorImageListResponse
+// @Failure 400 {object} apiError
+// @Failure 401 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /images/author [get]
 func (s *Server) imagesByAuthor(c *gin.Context) {
 	author := trimTo(c.Query("author"), 120)
 	req, err := imageRequestFromQuery(c)
@@ -272,6 +322,22 @@ func (s *Server) imagesByAuthor(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": imagesToDTO(images), "total": total, "author": author})
 }
 
+// randomImages godoc
+// @Summary Get random images
+// @Description Returns a random selection of visible images, optionally filtered by author. Authentication is optional; it enables the mine/uploadedBy filters.
+// @Tags images
+// @Produce json
+// @Param amount query int false "Number of images (default 1, max 50)"
+// @Param author query string false "Author filter"
+// @Param exclude query []string false "Image IDs to exclude" collectionFormat(csv)
+// @Param visibility query string false "Visibility filter" Enums(all, public, private)
+// @Param service query string false "Public service name filter"
+// @Param uploadedBy query []string false "Uploader IDs or usernames (comma separated, 'me' allowed)" collectionFormat(csv)
+// @Param mine query bool false "Only images uploaded by the signed-in user"
+// @Success 200 {array} imageDTO
+// @Failure 400 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /images/random [get]
 func (s *Server) randomImages(c *gin.Context) {
 	amount := parseAmount(c, 1, 50)
 	var exclude []string
@@ -293,6 +359,15 @@ func (s *Server) randomImages(c *gin.Context) {
 	c.JSON(http.StatusOK, imagesToDTO(images))
 }
 
+// imageMeta godoc
+// @Summary Get image metadata
+// @Tags images
+// @Produce json
+// @Param id path string true "Image ID"
+// @Success 200 {object} imageDTO
+// @Failure 404 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /images/{id}/meta [get]
 func (s *Server) imageMeta(c *gin.Context) {
 	id := c.Param("id")
 	img, err := s.Store.GetImage(c.Request.Context(), id)
@@ -303,6 +378,24 @@ func (s *Server) imageMeta(c *gin.Context) {
 	c.JSON(http.StatusOK, imageToDTO(img))
 }
 
+// serveImage godoc
+// @Summary Fetch an image
+// @Description Serves a rendered variant by default (WebP, capped at 1920px long edge / 1080px tall). Use original=true for the pristine upload.
+// @Tags images
+// @Produce image/webp
+// @Param id path string true "Image ID"
+// @Param original query bool false "Return the original file instead of a rendered variant"
+// @Param download query bool false "Send the image as an attachment"
+// @Param format query string false "Output format" Enums(webp, png, jpg, jpeg)
+// @Param w query int false "Target width (1-8192)"
+// @Param h query int false "Target height (1-8192)"
+// @Param quality query int false "Encoding quality (1-100)"
+// @Success 200 {file} binary "Image bytes"
+// @Failure 304 "Not modified"
+// @Failure 400 {object} apiError
+// @Failure 404 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /images/{id} [get]
 func (s *Server) serveImage(c *gin.Context) {
 	id := c.Param("id")
 	img, err := s.Store.GetImage(c.Request.Context(), id)
@@ -413,6 +506,29 @@ func (s *Server) serveImage(c *gin.Context) {
 	c.Data(http.StatusOK, contentType, data)
 }
 
+// listImagesAdmin godoc
+// @Summary List images (admin)
+// @Description Lists images including private and optionally deleted entries, using the shared admin filters.
+// @Tags images
+// @Security BearerAuth
+// @Produce json
+// @Param amount query int false "Page size (default 50, max 500)"
+// @Param offset query int false "Pagination offset"
+// @Param author query string false "Author substring filter"
+// @Param authorName query string false "Alias for author"
+// @Param titleRegex query string false "Title regex filter"
+// @Param visibility query string false "Visibility filter" Enums(all, public, private)
+// @Param service query string false "Public service name filter"
+// @Param uploadedBy query []string false "Uploader IDs or usernames (comma separated, 'me' allowed)" collectionFormat(csv)
+// @Param mine query bool false "Only images uploaded by the signed-in user"
+// @Param includeDeleted query bool false "Include soft-deleted images"
+// @Param time query string false "Time window (accepted for symmetry with the vote filters)" Enums(day, week, month, year, all, custom)
+// @Success 200 {object} ImageListResponse
+// @Failure 400 {object} apiError
+// @Failure 401 {object} apiError
+// @Failure 403 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /admin/images [get]
 func (s *Server) listImagesAdmin(c *gin.Context) {
 	_, imgf, _, err := filterFromQuery(c)
 	if err != nil {
@@ -427,6 +543,22 @@ func (s *Server) listImagesAdmin(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": imagesToDTO(images), "total": total})
 }
 
+// updateImageAdmin godoc
+// @Summary Update image metadata (admin)
+// @Description Updates author, title and public-service provenance. Setting fromPublicService=false clears serviceName.
+// @Tags images
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path string true "Image ID"
+// @Param payload body updateImageRequest true "Fields to update"
+// @Success 200 {object} imageDTO
+// @Failure 400 {object} apiError
+// @Failure 401 {object} apiError
+// @Failure 403 {object} apiError
+// @Failure 404 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /admin/images/{id} [patch]
 func (s *Server) updateImageAdmin(c *gin.Context) {
 	id := c.Param("id")
 	var req updateImageRequest
@@ -478,6 +610,20 @@ func (s *Server) updateImageAdmin(c *gin.Context) {
 	c.JSON(http.StatusOK, imageToDTO(img))
 }
 
+// deleteImageAdmin godoc
+// @Summary Delete an image (admin)
+// @Description Deletes the image, its cache variants and (unless keepVotes=true) its votes.
+// @Tags images
+// @Security BearerAuth
+// @Produce json
+// @Param id path string true "Image ID"
+// @Param keepVotes query bool false "Keep the votes that reference this image"
+// @Success 200 {object} DeleteImageResponse
+// @Failure 401 {object} apiError
+// @Failure 403 {object} apiError
+// @Failure 404 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /admin/images/{id} [delete]
 func (s *Server) deleteImageAdmin(c *gin.Context) {
 	id := c.Param("id")
 	keepVotes := c.Query("keepVotes") == "true"
@@ -488,6 +634,27 @@ func (s *Server) deleteImageAdmin(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"deleted": id})
 }
 
+// bulkDeleteImagesAdmin godoc
+// @Summary Bulk delete images (admin)
+// @Description Deletes the images named by ids, or every image matching the shared admin filters when ids is omitted.
+// @Tags images
+// @Security BearerAuth
+// @Produce json
+// @Param ids query []string false "Explicit image IDs; takes precedence over the filters" collectionFormat(csv)
+// @Param keepVotes query bool false "Keep votes that reference the deleted images"
+// @Param author query string false "Author substring filter"
+// @Param titleRegex query string false "Title regex filter"
+// @Param visibility query string false "Visibility filter" Enums(all, public, private)
+// @Param service query string false "Public service name filter"
+// @Param uploadedBy query []string false "Uploader IDs or usernames (comma separated, 'me' allowed)" collectionFormat(csv)
+// @Param mine query bool false "Only images uploaded by the signed-in user"
+// @Param includeDeleted query bool false "Include soft-deleted images"
+// @Success 200 {object} DeletedCountResponse
+// @Failure 400 {object} apiError
+// @Failure 401 {object} apiError
+// @Failure 403 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /admin/images [delete]
 func (s *Server) bulkDeleteImagesAdmin(c *gin.Context) {
 	_, imgf, _, err := filterFromQuery(c)
 	if err != nil {

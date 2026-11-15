@@ -20,12 +20,7 @@ func (s *Server) Router() *gin.Engine {
 	api := r.Group("/api/v1")
 	api.Use(s.attachServer())
 
-	api.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"status": "ok",
-			"time":   time.Now().UTC(),
-		})
-	})
+	api.GET("/health", s.health)
 	api.GET("/config", s.needsBootstrap)
 	api.GET("/frontend-config", s.frontendConfig)
 	api.GET("/users/needs-bootstrap", s.needsBootstrap)
@@ -91,6 +86,17 @@ func (s *Server) Router() *gin.Engine {
 	})
 
 	return r
+}
+
+// health godoc
+// @Summary Health check
+// @Description Returns the API status and the current server time.
+// @Tags system
+// @Produce json
+// @Success 200 {object} HealthResponse
+// @Router /health [get]
+func (s *Server) health(c *gin.Context) {
+	c.JSON(http.StatusOK, HealthResponse{Status: "ok", Time: time.Now().UTC()})
 }
 
 func (s *Server) serveSPA(c *gin.Context) {

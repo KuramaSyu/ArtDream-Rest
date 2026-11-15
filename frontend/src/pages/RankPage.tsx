@@ -12,11 +12,11 @@ import {
   FormControlLabel,
   IconButton,
   MenuItem,
-  Slider,
   TextField,
   Tooltip,
   Typography,
   alpha,
+  useMediaQuery,
   useTheme,
 } from "@mui/material";
 import {
@@ -25,7 +25,6 @@ import {
   AutoAwesomeRounded,
   CloseRounded,
   CloudUploadOutlined,
-  EmojiEventsRounded,
   FullscreenRounded,
   SwapHorizRounded,
   TuneRounded,
@@ -49,8 +48,6 @@ import { useStageImages } from "../theme/ThemeHost";
 import { useFrontendConfig } from "../config/FrontendConfig";
 
 type Side = "left" | "right";
-
-type SliderHover = { value: number; id: number };
 
 interface RankFiltersDraft {
   visibility: "" | ImageVisibility;
@@ -80,16 +77,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-function verdictText(value: number, left: string, right: string): string {
-  if (value >= 49 && value <= 52) return "a perfect draw";
-  if (value < 49) {
-    const strength = value <= 12 ? "clearly" : value <= 32 ? "softly" : "barely";
-    return `${strength} ${left}`;
-  }
-  const strength = value >= 88 ? "clearly" : value >= 68 ? "softly" : "barely";
-  return `${strength} ${right}`;
-}
-
 const FIVE_RATE_HINTS = [
   { key: "1", label: "left" },
   { key: "2", label: "lean left" },
@@ -97,9 +84,6 @@ const FIVE_RATE_HINTS = [
   { key: "4", label: "lean right" },
   { key: "5", label: "right" },
 ] as const;
-
-/** Long-slider value previewed while the matching five-point area is hovered. */
-const FIVE_AREA_VALUES = [1, 26, 50, 75, 100] as const;
 
 function Keycap({ children }: { children: string }) {
   return (
@@ -127,103 +111,28 @@ function Keycap({ children }: { children: string }) {
   );
 }
 
-type DuelSliderProps = {
+type DuelPanelProps = {
   leftName: string;
   rightName: string;
   disabled: boolean;
-  hover: SliderHover | null;
-  resetKey: string;
-  onValue: (value: number) => void;
+  zone: number | null;
+  onZoneChange: (zone: number | null) => void;
   onPick: (side: Side) => void;
   onRate: (rating: number) => void;
 };
 
-/**
- * Long slider plus its verdict label. Kept as its own component so the
- * requestAnimationFrame animation only re-renders this small subtree instead of
- * the whole duel page (artwork cards included) on every frame.
- *
- * Values are fractional while animating: the thumb glides by sub-pixel amounts
- * instead of stepping across 1% chunks of the track, and exponential smoothing
- * keeps the velocity continuous when the pointer hops from one image to the other.
- */
-function DuelSlider({
+function DuelPanel({
   leftName,
   rightName,
   disabled,
-  hover,
-  resetKey,
-  onValue,
+  zone,
+  onZoneChange,
   onPick,
   onRate,
-}: DuelSliderProps) {
+}: DuelPanelProps) {
   const theme = useTheme();
-  const [value, setValue] = useState(50);
-  const [zone, setZone] = useState<number | null>(null);
-  const valueRef = useRef(50);
-  const goalRef = useRef(50);
-  const animation = useRef<number | null>(null);
-  const onValueRef = useRef(onValue);
-  onValueRef.current = onValue;
-
-  const stop = useCallback(() => {
-    if (animation.current !== null) {
-      cancelAnimationFrame(animation.current);
-      animation.current = null;
-    }
-  }, []);
-
-  const commit = useCallback((next: number) => {
-    valueRef.current = next;
-    onValueRef.current(next);
-    setValue(next);
-  }, []);
-
-  /** Glide toward a goal, keeping velocity when the goal changes mid-flight. */
-  const glideTo = useCallback(
-    (goal: number) => {
-      goalRef.current = goal;
-      if (animation.current !== null) return;
-      let last = performance.now();
-      const step = (now: number) => {
-        const dt = Math.min(64, Math.max(0, now - last));
-        last = now;
-        const current = valueRef.current;
-        const target = goalRef.current;
-        const next = current + (target - current) * (1 - Math.exp(-dt / 70));
-        if (Math.abs(target - next) < 0.4) {
-          commit(target);
-          animation.current = null;
-          return;
-        }
-        commit(next);
-        animation.current = requestAnimationFrame(step);
-      };
-      animation.current = requestAnimationFrame(step);
-    },
-    [commit],
-  );
-
-  useEffect(() => () => stop(), [stop]);
-
-  // Every new pair starts from the middle.
-  useEffect(() => {
-    stop();
-    goalRef.current = 50;
-    valueRef.current = 50;
-    onValueRef.current(50);
-    setValue(50);
-    setZone(null);
-  }, [resetKey, stop]);
-
-  useEffect(() => {
-    if (!hover) return;
-    setZone(null);
-    glideTo(hover.value);
-  }, [hover, glideTo]);
-
-  const verdict = verdictText(value, leftName, rightName);
   const activeZone = zone;
+  const activeHint = activeZone !== null ? FIVE_RATE_HINTS[activeZone - 1] : null;
 
   return (
     <>
@@ -233,7 +142,7 @@ function DuelSlider({
           alignItems: "center",
           justifyContent: "space-between",
           gap: 2,
-          mb: 0.4,
+          mb: 1.4,
         }}
       >
         <Box sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}>
@@ -251,12 +160,10 @@ function DuelSlider({
             className="display"
             sx={{ fontSize: { xs: "1rem", sm: "1.2rem" }, fontWeight: 620 }}
           >
-            {verdict}
+            {activeHint ? activeHint.label : "choose a verdict"}
           </Typography>
           <Typography sx={{ fontSize: "0.68rem", letterSpacing: "0.14em", opacity: 0.55 }}>
-            {activeZone !== null
-              ? `${activeZone}/5 — ${FIVE_RATE_HINTS[activeZone - 1].label}`
-              : `${Math.round(value)}/100`}
+            {activeZone !== null ? `${activeZone}/5` : "1 — 5"}
           </Typography>
         </Box>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}>
@@ -278,14 +185,13 @@ function DuelSlider({
         aria-label="Five quick verdict areas"
         sx={{
           display: "grid",
-          gridTemplateColumns: { xs: "minmax(0, 1fr)", md: "repeat(5, minmax(0, 1fr))" },
-          gap: 1,
-          mt: 1.4,
-          mb: 1.6,
+          gridTemplateColumns: { xs: "1fr", md: "repeat(5, minmax(0, 1fr))" },
+          gap: { xs: 0.55, md: 1 },
+          mb: 0.4,
           opacity: disabled ? 0.55 : 1,
           transition: "opacity 180ms ease",
         }}
-        onMouseLeave={() => setZone(null)}
+        onMouseLeave={() => onZoneChange(null)}
       >
         {FIVE_RATE_HINTS.map((hint, index) => {
           const rating = index + 1;
@@ -304,16 +210,12 @@ function DuelSlider({
               aria-disabled={disabled}
               aria-label={`Rate ${rating} of 5, ${hint.label}`}
               onMouseEnter={() => {
-                if (disabled) return;
-                setZone(rating);
-                glideTo(FIVE_AREA_VALUES[index]);
+                if (!disabled) onZoneChange(rating);
               }}
               onFocus={() => {
-                if (disabled) return;
-                setZone(rating);
-                glideTo(FIVE_AREA_VALUES[index]);
+                if (!disabled) onZoneChange(rating);
               }}
-              onBlur={() => setZone((current) => (current === rating ? null : current))}
+              onBlur={() => onZoneChange(null)}
               onClick={() => {
                 if (!disabled) onRate(rating);
               }}
@@ -326,12 +228,12 @@ function DuelSlider({
               sx={{
                 position: "relative",
                 display: "flex",
-                flexDirection: { xs: "row", md: "column" },
+                flexDirection: "column",
                 alignItems: "center",
                 justifyContent: "center",
-                gap: { xs: 1.2, md: 0.5 },
-                minHeight: { xs: 52, md: 86 },
-                px: 1.5,
+                gap: { xs: 0.35, md: 0.5 },
+                minHeight: { xs: 40, md: 86 },
+                px: { xs: 0.4, md: 1.5 },
                 borderRadius: 3,
                 cursor: disabled ? "default" : "pointer",
                 outline: "none",
@@ -353,7 +255,7 @@ function DuelSlider({
               <Box
                 component="span"
                 sx={{
-                  fontSize: { xs: "1.2rem", md: "1.7rem" },
+                  fontSize: { xs: "1.15rem", md: "1.7rem" },
                   fontWeight: 700,
                   lineHeight: 1,
                   color: active ? tint : "text.primary",
@@ -365,6 +267,7 @@ function DuelSlider({
               <Box
                 component="span"
                 sx={{
+                  display: { xs: "none", md: "block" },
                   fontSize: "0.6rem",
                   letterSpacing: "0.12em",
                   textTransform: "uppercase",
@@ -380,98 +283,44 @@ function DuelSlider({
         })}
       </Box>
 
-      <Box sx={{ px: 0.5, pt: 0.6 }}>
-        <Slider
-          className="slider-track-gradient"
-          value={value}
-          onChange={(_event, next) => {
-            stop();
-            setZone(null);
-            const numeric = next as number;
-            goalRef.current = numeric;
-            commit(numeric);
-          }}
-          min={1}
-          max={100}
-          step={1}
-          disabled={disabled}
-          aria-label="How much better is the right image than the left image?"
-          sx={{
-            "--ad-slider-gradient": `linear-gradient(90deg, ${theme.palette.primary.main}, ${theme.palette.secondary.main})`,
-          }}
-        />
-        <Box
-          sx={{
-            display: "flex",
-            justifyContent: "space-between",
-            fontSize: "0.66rem",
-            letterSpacing: "0.1em",
-            textTransform: "uppercase",
-            color: "text.secondary",
-            opacity: 0.7,
-            mt: -0.4,
-            px: 0.5,
-          }}
-        >
-          <span>left feels better</span>
-          <span>even</span>
-          <span>right feels better</span>
-        </Box>
-
-        <Box
-          aria-label="Keyboard shortcuts"
-          sx={{
-            display: { xs: "none", md: "flex" },
-            flexWrap: "wrap",
-            alignItems: "center",
-            columnGap: 1.4,
-            rowGap: 1,
-            mt: 1.7,
-          }}
-        >
-          <Box sx={{ display: "flex", alignItems: "flex-end", gap: 0.9 }}>
-            {FIVE_RATE_HINTS.map((hint) => (
-              <Box
-                key={hint.key}
-                sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0.35 }}
-              >
-                <Keycap>{hint.key}</Keycap>
-                <Box
-                  sx={{
-                    fontSize: "0.6rem",
-                    letterSpacing: "0.05em",
-                    textTransform: "uppercase",
-                    color: "text.secondary",
-                    opacity: 0.65,
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {hint.label}
-                </Box>
-              </Box>
-            ))}
-          </Box>
-
-          <Divider orientation="vertical" flexItem sx={{ opacity: 0.2, alignSelf: "stretch" }} />
-
-          <Box sx={{ display: "flex", alignItems: "center", gap: 0.6 }}>
-            <Keycap>←</Keycap>
-            <Keycap>→</Keycap>
-            <Typography sx={{ fontSize: "0.7rem", color: "text.secondary", opacity: 0.8 }}>
-              soft pick
-            </Typography>
-          </Box>
-
-          <Divider orientation="vertical" flexItem sx={{ opacity: 0.2, alignSelf: "stretch" }} />
-
-          <Box sx={{ display: "flex", alignItems: "center", gap: 0.6 }}>
-            <Keycap>Enter</Keycap>
-            <Typography sx={{ fontSize: "0.7rem", color: "text.secondary", opacity: 0.8 }}>
-              send slider
-            </Typography>
-          </Box>
+      <Box
+        aria-label="Keyboard shortcuts"
+        sx={{
+          display: { xs: "none", md: "flex" },
+          flexWrap: "wrap",
+          alignItems: "center",
+          columnGap: 1.4,
+          rowGap: 1,
+          mt: 1.2,
+        }}
+      >
+        <Typography sx={{ fontSize: "0.7rem", color: "text.secondary", opacity: 0.65 }}>
+          Click a column for 1–5
+        </Typography>
+        <Divider orientation="vertical" flexItem sx={{ opacity: 0.2, alignSelf: "stretch" }} />
+        <Typography sx={{ fontSize: "0.7rem", color: "text.secondary", opacity: 0.65 }}>
+          Keys 1–5 rate
+        </Typography>
+        <Divider orientation="vertical" flexItem sx={{ opacity: 0.2, alignSelf: "stretch" }} />
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.6 }}>
+          <Keycap>←</Keycap>
+          <Keycap>→</Keycap>
+          <Typography sx={{ fontSize: "0.7rem", color: "text.secondary", opacity: 0.8 }}>
+            soft pick
+          </Typography>
         </Box>
       </Box>
+      <Typography
+        sx={{
+          display: { xs: "block", md: "none" },
+          mt: 1.2,
+          fontSize: "0.76rem",
+          color: "text.secondary",
+          opacity: 0.72,
+        }}
+      >
+        Tap a row in the artwork or a number here.
+      </Typography>
     </>
   );
 }
@@ -481,6 +330,7 @@ export function RankPage() {
   const { user } = useAuth();
   const { notify } = useToast();
   const theme = useTheme();
+  const isWideLayout = useMediaQuery(theme.breakpoints.up("md"));
   const { config: frontendConfig, loading: frontendConfigLoading } = useFrontendConfig();
   const rankingAnonymized = frontendConfig.rankingAnonymized;
   const hideAuthors = frontendConfigLoading || rankingAnonymized;
@@ -491,7 +341,8 @@ export function RankPage() {
   const [voting, setVoting] = useState(false);
   const [error, setError] = useState("");
   const [picked, setPicked] = useState<Side | null>(null);
-  const [hover, setHover] = useState<SliderHover | null>(null);
+  const [activeZone, setActiveZone] = useState<number | null>(null);
+  const [zonePreviewOpen, setZonePreviewOpen] = useState(false);
   const [castCount, setCastCount] = useState(0);
   const [reloadTick, setReloadTick] = useState(0);
   const [fullscreen, setFullscreen] = useState<ImageItem | null>(null);
@@ -530,22 +381,20 @@ export function RankPage() {
 
   const recent = useRef<string[]>([]);
   const startedAt = useRef(Date.now());
-  const sliderRef = useRef(50);
-  const hoverId = useRef(0);
-  const handleSliderValue = useCallback((value: number) => {
-    sliderRef.current = value;
-  }, []);
-
+  const ratingFromPoint = useCallback(
+    (clientX: number, clientY: number, element: HTMLElement) => {
+      const rect = element.getBoundingClientRect();
+      // Desktop results are side-by-side, so columns map to 1–5.
+      // Mobile results are stacked, so rows map to 1–5.
+      const ratio = isWideLayout
+        ? (clientX - rect.left) / rect.width
+        : (clientY - rect.top) / rect.height;
+      return Math.min(5, Math.max(1, Math.floor(ratio * 5) + 1));
+    },
+    [isWideLayout],
+  );
   const pairUrls = useMemo(() => pair.map((item) => item.url), [pair]);
   useStageImages(pairUrls);
-
-  const handleHover = (side: Side) => {
-    if (voting || pair.length < 2) return;
-    if (!window.matchMedia("(hover: hover)").matches) return;
-    // Hand a fresh target to the slider; it glides there from wherever it is.
-    hoverId.current += 1;
-    setHover({ value: side === "left" ? 25 : 75, id: hoverId.current });
-  };
 
   const fiveMode = useMemo(() => {
     return (
@@ -556,22 +405,6 @@ export function RankPage() {
         description: "",
         minValue: 1,
         maxValue: 5,
-        isBinary: false,
-        createdAt: "",
-      }
-    );
-  }, [modes]);
-
-  const hundredMode = useMemo(() => {
-    return (
-      modes.find((mode) => !mode.isBinary && mode.maxValue - mode.minValue >= 90) ??
-      modes.find((mode) => !mode.isBinary && mode.maxValue - mode.minValue > 10) ??
-      {
-        id: 0,
-        name: "ahp100",
-        description: "",
-        minValue: 1,
-        maxValue: 100,
         isBinary: false,
         createdAt: "",
       }
@@ -601,9 +434,7 @@ export function RankPage() {
       }
       setPair(items);
       setPicked(null);
-      hoverId.current += 1;
-      setHover(null);
-      sliderRef.current = 50;
+      setActiveZone(null);
       startedAt.current = Date.now();
       if (items.length < 2) {
         setError("ArtDream needs at least two artworks to start a duel.");
@@ -623,6 +454,14 @@ export function RankPage() {
   useEffect(() => {
     void loadPair(recent.current);
   }, [loadPair, reloadTick]);
+
+  const previewShown = useRef(false);
+  useEffect(() => {
+    if (previewShown.current || loading || pair.length < 2) return;
+    previewShown.current = true;
+    setZonePreviewOpen(true);
+    setActiveZone(null);
+  }, [loading, pair.length]);
 
   const submitVote = useCallback(
     async (payload: Omit<VotePayload, "leftImageId" | "rightImageId">) => {
@@ -679,6 +518,7 @@ export function RankPage() {
   const pick = (side: Side) => {
     if (voting || pair.length < 2) return;
     setPicked(side);
+    setActiveZone(side === "left" ? 2 : 4);
     const range = fiveMode.maxValue - fiveMode.minValue;
     const value =
       side === "left"
@@ -689,52 +529,39 @@ export function RankPage() {
       value,
       minValue: fiveMode.minValue,
       maxValue: fiveMode.maxValue,
-      metadata: { ui: "image-click", side },
+      metadata: { ui: "soft-pick", side },
     });
   };
 
-  const rateFive = (rating: number) => {
+  const rateFive = (
+    rating: number,
+    ui: "keyboard-five" | "five-area" | "five-button" = "five-button",
+  ) => {
     if (voting || pair.length < 2) return;
     const span = fiveMode.maxValue - fiveMode.minValue;
     const value = Math.round(fiveMode.minValue + ((rating - 1) / 4) * span);
     setPicked(rating === 3 ? null : rating < 3 ? "left" : "right");
+    setActiveZone(rating);
     void submitVote({
       mode: fiveMode.name,
       value,
       minValue: fiveMode.minValue,
       maxValue: fiveMode.maxValue,
-      metadata: { ui: "keyboard-five", rating },
-    });
-  };
-
-  const submitSlider = () => {
-    void submitVote({
-      mode: hundredMode.name,
-      value: Math.round(sliderRef.current),
-      minValue: 1,
-      maxValue: 100,
-      metadata: { ui: "long-slider" },
+      metadata: { ui, rating },
     });
   };
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
-      if (rankFiltersOpen) return;
+      if (rankFiltersOpen || zonePreviewOpen) return;
       if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
       const target = event.target as HTMLElement | null;
-      // Never steal keys from text controls, selects, or the slider itself.
+      // Never steal keys from text and select controls.
       if (
         target?.isContentEditable ||
         target?.closest(
-          'input, textarea, select, [role="combobox"], [role="listbox"], [role="slider"], .MuiSlider-root',
+          'input, textarea, select, [role="combobox"], [role="listbox"]',
         )
-      ) {
-        return;
-      }
-      // Let a focused button/link handle Enter itself.
-      if (
-        event.key === "Enter" &&
-        target?.closest('button, a, [role="button"]')
       ) {
         return;
       }
@@ -746,10 +573,7 @@ export function RankPage() {
         pick("right");
       } else if (event.key >= "1" && event.key <= "5") {
         event.preventDefault();
-        rateFive(Number(event.key));
-      } else if (event.key === "Enter") {
-        event.preventDefault();
-        submitSlider();
+        rateFive(Number(event.key), "keyboard-five");
       }
     };
     window.addEventListener("keydown", handler);
@@ -869,12 +693,44 @@ export function RankPage() {
               transition={{ duration: 0.42, ease: [0.2, 0.9, 0.2, 1] }}
             >
               <Box
+                onClick={(event) => {
+                  if (voting || zonePreviewOpen) return;
+                  if (
+                    (event.target as HTMLElement).closest(
+                      'button, a, [role="button"]',
+                    )
+                  ) {
+                    return;
+                  }
+                  rateFive(
+                    ratingFromPoint(event.clientX, event.clientY, event.currentTarget),
+                    "five-area",
+                  );
+                }}
+                onMouseMove={(event) => {
+                  if (voting || zonePreviewOpen) return;
+                  setActiveZone(ratingFromPoint(event.clientX, event.clientY, event.currentTarget));
+                }}
+                onMouseLeave={() => setActiveZone(null)}
+                onPointerDown={(event) => {
+                  if (voting || zonePreviewOpen || event.pointerType === "mouse") return;
+                  setActiveZone(
+                    ratingFromPoint(event.clientX, event.clientY, event.currentTarget),
+                  );
+                }}
                 sx={{
-                  display: "grid",
-                  gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" },
-                  gap: { xs: 2, md: 3 },
+                  position: "relative",
+                  cursor: voting ? "default" : "pointer",
+                  touchAction: "pan-y",
                 }}
               >
+                <Box
+                  sx={{
+                    display: "grid",
+                    gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" },
+                    gap: { xs: 2, md: 3 },
+                  }}
+                >
                 {[left, right].map((item, index) => {
                   if (!item) return null;
                   const side: Side = index === 0 ? "left" : "right";
@@ -885,25 +741,12 @@ export function RankPage() {
                   return (
                     <motion.div
                       key={item.id}
-                      whileHover={{ rotate: side === "left" ? -0.35 : 0.35 }}
-                      whileTap={{ scale: 0.985 }}
                       animate={isPicked ? { scale: 1.018 } : { scale: 1 }}
                       transition={{ type: "spring", stiffness: 260, damping: 22 }}
                       style={{ position: "relative" }}
                     >
                       <Box
                         className="image-frame rank-image-card"
-                        role="button"
-                        tabIndex={0}
-                        aria-label={`Vote for ${cardLabel}`}
-                        onClick={() => pick(side)}
-                        onMouseEnter={() => handleHover(side)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" || event.key === " ") {
-                            event.preventDefault();
-                            pick(side);
-                          }
-                        }}
                         sx={{
                           height: { xs: "clamp(240px, 38vh, 380px)", md: "clamp(340px, 50vh, 560px)" },
                           border: isPicked
@@ -950,40 +793,27 @@ export function RankPage() {
                           </IconButton>
                         </Tooltip>
 
-                        <Box
-                          className="pick-hint"
-                          sx={{
-                            opacity: isPicked ? 1 : undefined,
-                            transform: isPicked ? "none" : undefined,
-                          }}
-                        >
-                          <Box
-                            sx={{
-                              px: 2.4,
-                              py: 1.2,
-                              borderRadius: 99,
-                              background: "rgba(10,9,15,.78)",
-                              border: "1px solid rgba(255,255,255,.24)",
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 1,
-                              fontWeight: 700,
-                              letterSpacing: "0.01em",
-                            }}
-                          >
-                            {isPicked ? (
-                              <>
-                                <AutoAwesomeRounded fontSize="small" />
-                                {side === "left" ? "left" : "right"} it is
-                              </>
-                            ) : (
-                              <>
-                                {side === "left" ? <ArrowLeftRounded /> : <ArrowRightRounded />}
-                                Pick this one
-                              </>
-                            )}
+                        {isPicked && (
+                          <Box className="pick-hint" sx={{ opacity: 1, transform: "none" }}>
+                            <Box
+                              sx={{
+                                px: 2.4,
+                                py: 1.2,
+                                borderRadius: 99,
+                                background: "rgba(10,9,15,.78)",
+                                border: "1px solid rgba(255,255,255,.24)",
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 1,
+                                fontWeight: 700,
+                                letterSpacing: "0.01em",
+                              }}
+                            >
+                              <AutoAwesomeRounded fontSize="small" />
+                              {side === "left" ? "left" : "right"} it is
+                            </Box>
                           </Box>
-                        </Box>
+                        )}
 
                         <Box
                           sx={{
@@ -992,6 +822,7 @@ export function RankPage() {
                             right: 0,
                             bottom: 0,
                             zIndex: 3,
+                            pointerEvents: "none",
                             p: { xs: 1.8, md: 2.4 },
                             display: "flex",
                             alignItems: "flex-end",
@@ -1049,6 +880,152 @@ export function RankPage() {
                     </motion.div>
                   );
                 })}
+                </Box>
+
+                {zonePreviewOpen && (
+                  <Box
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="How five-zone ranking works"
+                    sx={{
+                      position: "absolute",
+                      inset: 0,
+                      zIndex: 6,
+                      display: "grid",
+                      gridTemplateColumns: {
+                        xs: "1fr",
+                        md: "repeat(5, minmax(0, 1fr))",
+                      },
+                      gridTemplateRows: {
+                        xs: "repeat(5, minmax(0, 1fr))",
+                        md: "1fr",
+                      },
+                      borderRadius: "22px",
+                      overflow: "hidden",
+                      background: "rgba(8,7,12,.42)",
+                    }}
+                  >
+                    {FIVE_RATE_HINTS.map((hint, index) => (
+                      <Box
+                        key={hint.key}
+                        sx={{
+                          display: "flex",
+                          flexDirection: { xs: "row", md: "column" },
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: { xs: 1.2, md: 0.6 },
+                          border: "1px solid rgba(255,255,255,.14)",
+                          background:
+                            index % 2 === 0
+                              ? "rgba(255,255,255,.035)"
+                              : "rgba(255,255,255,.015)",
+                        }}
+                      >
+                        <Typography
+                          sx={{
+                            fontSize: { xs: "1.5rem", md: "2rem" },
+                            fontWeight: 750,
+                            lineHeight: 1,
+                          }}
+                        >
+                          {index + 1}
+                        </Typography>
+                        <Typography
+                          sx={{
+                            fontSize: "0.68rem",
+                            letterSpacing: "0.12em",
+                            textTransform: "uppercase",
+                            color: "rgba(255,255,255,.72)",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {hint.label}
+                        </Typography>
+                      </Box>
+                    ))}
+
+                    <Box
+                      sx={{
+                        position: "absolute",
+                        left: "50%",
+                        bottom: 14,
+                        transform: "translateX(-50%)",
+                        width: { xs: "calc(100% - 28px)", sm: "auto" },
+                        maxWidth: 430,
+                        p: 1.8,
+                        borderRadius: 3,
+                        textAlign: "center",
+                        background: "rgba(10,9,15,.92)",
+                        border: "1px solid rgba(255,255,255,.16)",
+                        boxShadow: "0 20px 50px rgba(0,0,0,.45)",
+                      }}
+                    >
+                      <Typography sx={{ fontWeight: 700, fontSize: "0.92rem" }}>
+                        {isWideLayout ? "Click a column" : "Tap a row"}
+                      </Typography>
+                      <Typography
+                        sx={{
+                          mt: 0.25,
+                          mb: 1.2,
+                          fontSize: "0.76rem",
+                          color: "text.secondary",
+                        }}
+                      >
+                        {isWideLayout
+                          ? "1 = far left · 5 = far right"
+                          : "1 = top · 5 = bottom"}
+                      </Typography>
+                      <Button
+                        size="small"
+                        variant="contained"
+                        disableElevation
+                        onClick={() => {
+                          setZonePreviewOpen(false);
+                          setActiveZone(null);
+                        }}
+                        sx={{ borderRadius: 99, px: 2.4, textTransform: "none" }}
+                      >
+                        Got it
+                      </Button>
+                    </Box>
+                  </Box>
+                )}
+
+                {activeZone !== null && !zonePreviewOpen && (
+                  <Box
+                    aria-hidden
+                    sx={{
+                      position: "absolute",
+                      pointerEvents: "none",
+                      zIndex: 1,
+                      left: { xs: `${(activeZone - 1) * 20}%`, md: 0 },
+                      top: { xs: 0, md: `${(activeZone - 1) * 20}%` },
+                      width: { xs: "20%", md: "100%" },
+                      height: { xs: "100%", md: "20%" },
+                      border: "1px solid rgba(255,255,255,.24)",
+                      background: "rgba(255,255,255,.035)",
+                      borderRadius: 2,
+                      transition: "left 130ms ease, top 130ms ease",
+                    }}
+                  >
+                    <Box
+                      sx={{
+                        position: "absolute",
+                        top: 10,
+                        left: 10,
+                        px: 0.8,
+                        py: 0.25,
+                        borderRadius: 1,
+                        background: "rgba(10,9,15,.62)",
+                        color: "rgba(255,255,255,.8)",
+                        fontSize: "0.66rem",
+                        letterSpacing: "0.08em",
+                      }}
+                    >
+                      {activeZone}/5
+                    </Box>
+                  </Box>
+                )}
               </Box>
             </motion.div>
           </AnimatePresence>
@@ -1063,68 +1040,15 @@ export function RankPage() {
               transition: "opacity 200ms ease",
             }}
           >
-            <DuelSlider
+            <DuelPanel
               leftName={leftName}
               rightName={rightName}
-              disabled={voting}
-              hover={hover}
-              resetKey={`${left?.id ?? ""}-${right?.id ?? ""}`}
-              onValue={handleSliderValue}
+              disabled={voting || zonePreviewOpen}
+              zone={activeZone}
+              onZoneChange={setActiveZone}
               onPick={pick}
               onRate={rateFive}
             />
-
-            <Divider sx={{ my: 2, opacity: 0.4 }} />
-
-            <Box
-              sx={{
-                display: "flex",
-                flexWrap: "wrap",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 1.5,
-              }}
-            >
-              <Typography
-                variant="body2"
-                color="text.secondary"
-                sx={{ display: { xs: "block", md: "none" }, opacity: 0.8 }}
-              >
-                Tap an image for a soft 2/5 or 4/5, tap an area for 1–5, or slide for the whole story.
-              </Typography>
-              <Typography
-                variant="body2"
-                color="text.secondary"
-                sx={{ display: { xs: "none", md: "block" }, opacity: 0.8 }}
-              >
-                Hover an image to nudge the slider, pick one of the five areas, or slide for the whole story.
-              </Typography>
-              <Button
-                variant="contained"
-                size="large"
-                onClick={submitSlider}
-                disabled={voting}
-                disableElevation
-                endIcon={
-                  voting ? (
-                    <CircularProgress size={18} color="inherit" />
-                  ) : (
-                    <EmojiEventsRounded />
-                  )
-                }
-                sx={{
-                  borderRadius: 99,
-                  px: 3,
-                  py: 1.1,
-                  textTransform: "none",
-                  fontWeight: 700,
-                  "&:hover": { transform: "translateY(-1px) scale(1.01)" },
-                  transition: "transform 200ms ease",
-                }}
-              >
-                send
-              </Button>
-            </Box>
           </Box>
         </>
       )}

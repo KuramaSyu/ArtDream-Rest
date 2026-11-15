@@ -187,6 +187,9 @@ export const api = {
         excludeAuthors: query.excludeAuthors,
         includeTitles: query.includeTitles,
         excludeTitles: query.excludeTitles,
+        rotation: query.rotation,
+        rotationPercent: query.rotationPercent,
+        exclude: query.exclude,
       },
     }),
 
@@ -281,7 +284,12 @@ export const api = {
     listUsers: () => request<ListResponse<User>>("/users"),
 
     updateFrontendConfig: (
-      body: Partial<Pick<FrontendConfig, "rankingAnonymized" | "defaultImageVisibility">>,
+      body: Partial<
+        Pick<
+          FrontendConfig,
+          "rankingAnonymized" | "defaultImageVisibility" | "rankRotationEnabled" | "rankRotationPercent"
+        >
+      >,
     ) => request<FrontendConfig>("/admin/frontend-config", { method: "PATCH", body }),
 
     createUser: (body: {

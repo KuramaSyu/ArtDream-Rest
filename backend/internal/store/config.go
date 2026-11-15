@@ -4,12 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
 const (
 	configKeyRankingAnonymized      = "ranking_anonymized"
 	configKeyDefaultImageVisibility = "default_image_visibility"
+	configKeyRankRotationEnabled    = "rank_rotation_enabled"
+	configKeyRankRotationPercent    = "rank_rotation_percent"
 	configKeyExcludeAuthors         = "rank_filter_exclude_authors"
 	configKeyExcludeTitles          = "rank_filter_exclude_titles"
 	configKeyIncludeAuthors         = "rank_filter_include_authors"
@@ -21,6 +25,7 @@ const (
 func (s *Store) GetAppConfig(ctx context.Context) (AppConfig, error) {
 	config := AppConfig{
 		DefaultImageVisibility: "all",
+		RankRotationPercent:    60,
 		ExcludeAuthors:         []string{},
 		ExcludeTitles:          []string{},
 		IncludeAuthors:         []string{},
@@ -48,6 +53,14 @@ func (s *Store) GetAppConfig(ctx context.Context) (AppConfig, error) {
 		case configKeyDefaultImageVisibility:
 			if visibility, err := NormalizeVisibility(value); err == nil {
 				config.DefaultImageVisibility = visibility
+			}
+		case configKeyRankRotationEnabled:
+			config.RankRotationEnabled = value == "true" || value == "1"
+		case configKeyRankRotationPercent:
+			if percent, err := strconv.Atoi(strings.TrimSpace(value)); err == nil {
+				if normalized, err := NormalizeRotationPercent(percent); err == nil {
+					config.RankRotationPercent = normalized
+				}
 			}
 		case configKeyExcludeAuthors:
 			config.ExcludeAuthors = decodePatternList(value)
@@ -96,6 +109,33 @@ func (s *Store) SetDefaultImageVisibility(ctx context.Context, visibility string
 		return err
 	}
 	return s.setConfigValue(ctx, configKeyDefaultImageVisibility, normalized)
+}
+
+// NormalizeRotationPercent validates the rank-rotation minimum share.
+func NormalizeRotationPercent(percent int) (int, error) {
+	if percent < 0 || percent > 100 {
+		return 0, fmt.Errorf("rankRotationPercent must be between 0 and 100")
+	}
+	return percent, nil
+}
+
+// SetRankRotationEnabled persists the admin switch for rank-result rotation.
+func (s *Store) SetRankRotationEnabled(ctx context.Context, enabled bool) error {
+	value := "false"
+	if enabled {
+		value = "true"
+	}
+	return s.setConfigValue(ctx, configKeyRankRotationEnabled, value)
+}
+
+// SetRankRotationPercent persists the minimum share of a rank page that should
+// differ from the previous period. Range: 0-100.
+func (s *Store) SetRankRotationPercent(ctx context.Context, percent int) error {
+	normalized, err := NormalizeRotationPercent(percent)
+	if err != nil {
+		return err
+	}
+	return s.setConfigValue(ctx, configKeyRankRotationPercent, strconv.Itoa(normalized))
 }
 
 // SetFilterLists persists the four regex pattern lists used to hide images

@@ -17,7 +17,6 @@ import {
   MenuItem,
   Pagination,
   Select,
-  Slider,
   Switch,
   Tab,
   Table,
@@ -114,8 +113,12 @@ export function AdminPage() {
   const { config: frontendConfig, update: updateFrontendConfig } = useFrontendConfig();
   const rankingAnonymized = frontendConfig.rankingAnonymized;
   const defaultImageVisibility = frontendConfig.defaultImageVisibility;
+  const rankRotationEnabled = frontendConfig.rankRotationEnabled;
+  const rankRotationPercent = frontendConfig.rankRotationPercent;
   const [rankingBusy, setRankingBusy] = useState(false);
   const [visibilityBusy, setVisibilityBusy] = useState(false);
+  const [rotationBusy, setRotationBusy] = useState(false);
+  const [rotationPercentDraft, setRotationPercentDraft] = useState(rankRotationPercent);
   const [tab, setTab] = useState<AdminTab>("rank");
 
   const [rank, setRank] = useState<AdminRankResponse | null>(null);
@@ -168,6 +171,10 @@ export function AdminPage() {
   const [bulkImagesOpen, setBulkImagesOpen] = useState(false);
   const [keepVotes, setKeepVotes] = useState(false);
   const [working, setWorking] = useState(false);
+
+  useEffect(() => {
+    setRotationPercentDraft(rankRotationPercent);
+  }, [rankRotationPercent]);
 
   const loadModes = useCallback(async () => {
     try {
@@ -424,6 +431,36 @@ export function AdminPage() {
       );
     } finally {
       setVisibilityBusy(false);
+    }
+  };
+
+  const saveRankRotation = async (patch: {
+    enabled?: boolean;
+    percent?: number;
+  }) => {
+    setRotationBusy(true);
+    try {
+      const updated = await updateFrontendConfig({
+        rankRotationEnabled: patch.enabled,
+        rankRotationPercent: patch.percent,
+      });
+      setRotationPercentDraft(updated.rankRotationPercent);
+      notify(
+        patch.enabled !== undefined
+          ? patch.enabled
+            ? `Rank rotation enabled at ${updated.rankRotationPercent}% minimum change.`
+            : "Rank rotation disabled."
+          : `Rank rotation minimum change set to ${updated.rankRotationPercent}%.`,
+        "success",
+      );
+      setRankRefresh((count) => count + 1);
+    } catch (error) {
+      notify(
+        error instanceof ApiError ? error.message : "Could not save the rank rotation setting.",
+        "error",
+      );
+    } finally {
+      setRotationBusy(false);
     }
   };
 
@@ -1290,6 +1327,53 @@ export function AdminPage() {
             </TextField>
           </FilterCard>
 
+          <FilterCard>
+            <Box sx={{ flex: 1, minWidth: 240 }}>
+              <Typography sx={{ fontWeight: 700 }}>Rank rotation</Typography>
+              <Typography variant="body2" color="text.secondary">
+                When enabled, <code>/images/rank</code> compares each period with the previous
+                equivalent period (same author, mode, visibility, uploader and regex filters). If
+                too few images changed, it fills or replaces entries with a deterministic rotating
+                selection so quiet periods do not show the same artwork again.
+              </Typography>
+            </Box>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={rankRotationEnabled}
+                  onChange={(event) => void saveRankRotation({ enabled: event.target.checked })}
+                  disabled={rotationBusy}
+                />
+              }
+              label="enabled"
+            />
+            <TextField
+              label="Minimum changed %"
+              type="number"
+              size="small"
+              value={rotationPercentDraft}
+              onChange={(event) => setRotationPercentDraft(Number(event.target.value))}
+              inputProps={{ min: 0, max: 100, step: 1 }}
+              sx={{ width: 160, ...inputSx }}
+              disabled={rotationBusy}
+            />
+            <Button
+              variant="contained"
+              onClick={() => {
+                const percent = Math.round(rotationPercentDraft);
+                if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+                  notify("Rank rotation percent must be between 0 and 100.", "warning");
+                  return;
+                }
+                void saveRankRotation({ percent });
+              }}
+              disabled={rotationBusy}
+              sx={{ borderRadius: 99, textTransform: "none" }}
+            >
+              Save %
+            </Button>
+          </FilterCard>
+
           {rulesLoading ? (
             <LoadingView label="Reading the rules…" />
           ) : (
@@ -1858,21 +1942,39 @@ function VoteEditDialog({
             </FormControl>
           ) : (
             <Box>
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 0.8 }}>
                 Value: <strong>{value}</strong> / {min}–{max}
               </Typography>
-              <Slider
-                value={value}
-                onChange={(_event, next) => setValue(next as number)}
-                min={min}
-                max={max}
-                step={1}
-                marks={[
-                  { value: min, label: `${min}` },
-                  { value: Math.round((min + max) / 2), label: "even" },
-                  { value: max, label: `${max}` },
-                ]}
-              />
+              <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
+                <TextField
+                  label="Value"
+                  type="number"
+                  size="small"
+                  value={value}
+                  onChange={(event) => {
+                    const next = Number(event.target.value);
+                    if (!Number.isFinite(next)) return;
+                    setValue(Math.min(max, Math.max(min, Math.round(next))));
+                  }}
+                  inputProps={{ min, max, step: 1 }}
+                  sx={{ width: 132 }}
+                />
+                {max - min <= 9 &&
+                  Array.from({ length: max - min + 1 }, (_, index) => min + index).map((number) => (
+                    <Button
+                      key={number}
+                      size="small"
+                      variant={value === number ? "contained" : "outlined"}
+                      onClick={() => setValue(number)}
+                      sx={{ minWidth: 38, px: 0.5 }}
+                    >
+                      {number}
+                    </Button>
+                  ))}
+              </Box>
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.8 }}>
+                Midpoint {Math.round((min + max) / 2)}
+              </Typography>
             </Box>
           )}
 

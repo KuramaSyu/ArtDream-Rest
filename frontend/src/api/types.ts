@@ -100,6 +100,8 @@ export interface RankEntry {
   /** Win rate expressed as a 0–100 percentage, rounded to one decimal. */
   winPercentage?: number;
   image: ImageItem;
+  /** True when rank rotation added this deterministic fallback image. */
+  rotated?: boolean;
 }
 
 export interface AdminRankEntry extends RankEntry {
@@ -149,6 +151,16 @@ export interface ImageModeration {
   updatedBy?: number;
 }
 
+export interface RankRotationInfo {
+  enabled: boolean;
+  percent: number;
+  previousFrom?: string;
+  previousTo?: string;
+  required: number;
+  changed: number;
+  satisfied: boolean;
+}
+
 export interface RankResponse {
   time: string;
   from?: string;
@@ -158,6 +170,7 @@ export interface RankResponse {
   total: number;
   totalVotes: number;
   winners: RankEntry[];
+  rotation?: RankRotationInfo;
 }
 
 export interface SessionResponse {
@@ -175,6 +188,10 @@ export interface FrontendConfig {
   rankingAnonymized: boolean;
   /** Fallback public/private mode for image requests that omit visibility. */
   defaultImageVisibility: ImageVisibility;
+  /** When enabled, quiet ranking periods are diversified against the previous period. */
+  rankRotationEnabled: boolean;
+  /** Minimum share (0-100) of a rank page that should differ from the previous period. */
+  rankRotationPercent: number;
   updatedAt?: string;
 }
 
@@ -188,6 +205,12 @@ export interface RankQuery extends ImageRequestFilters {
   author?: string;
   titleRegex?: string;
   mode?: string;
+  /** Per-request override of the admin rank-rotation switch. */
+  rotation?: boolean;
+  /** Per-request override of the minimum changed share (0-100). */
+  rotationPercent?: number;
+  /** Comma-separated image ids to omit from both periods and fallbacks. */
+  exclude?: string;
 }
 
 export interface VotePayload {

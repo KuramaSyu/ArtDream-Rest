@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -131,6 +132,14 @@ func (r *voteRequest) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// listVoteModes godoc
+// @Summary List vote modes
+// @Description Returns the available voting scales (binary duel modes and value-scaled modes).
+// @Tags rank
+// @Produce json
+// @Success 200 {array} store.VoteMode
+// @Failure 500 {object} apiError
+// @Router /rank/modes [get]
 func (s *Server) listVoteModes(c *gin.Context) {
 	modes, err := s.Store.ListVoteModes(c.Request.Context())
 	if err != nil {
@@ -156,6 +165,20 @@ func resolveVoteMode(c *gin.Context, modeID int64, modeName string) (*store.Vote
 	return sStore(c).GetVoteModeByName(ctx, "duel")
 }
 
+// castVote godoc
+// @Summary Cast a vote
+// @Description Compares two images. The body accepts the canonical field names shown below as well as several aliases (e.g. `left`, `right`, `imageA`, `imageB`, `score`). Binary modes use `winner` (left/right/tie); value-scaled modes use `value`.
+// @Tags rank
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param payload body VotePayload true "Vote details"
+// @Success 201 {object} VoteDTO
+// @Failure 400 {object} apiError
+// @Failure 401 {object} apiError
+// @Failure 404 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /rank/vote [post]
 func (s *Server) castVote(c *gin.Context) {
 	user := currentUser(c)
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 256<<10)
@@ -346,20 +369,33 @@ type rankEntry struct {
 	WinRate       float64  `json:"winRate"`
 	WinPercentage float64  `json:"winPercentage"`
 	Image         imageDTO `json:"image"`
+	// Rotated marks a deterministic fallback image added by rank rotation.
+	Rotated bool `json:"rotated,omitempty"`
 
 	// deranked is an internal sort key; it is never serialized publicly.
 	deranked bool
 }
 
+type rankRotationInfo struct {
+	Enabled      bool    `json:"enabled"`
+	Percent      int     `json:"percent"`
+	PreviousFrom *string `json:"previousFrom,omitempty"`
+	PreviousTo   *string `json:"previousTo,omitempty"`
+	Required     int     `json:"required"`
+	Changed      int     `json:"changed"`
+	Satisfied    bool    `json:"satisfied"`
+}
+
 type rankResponse struct {
-	Time       string      `json:"time"`
-	From       *string     `json:"from,omitempty"`
-	To         *string     `json:"to,omitempty"`
-	Amount     int         `json:"amount"`
-	Offset     int         `json:"offset"`
-	Total      int         `json:"total"`
-	TotalVotes int         `json:"totalVotes"`
-	Winners    []rankEntry `json:"winners"`
+	Time       string            `json:"time"`
+	From       *string           `json:"from,omitempty"`
+	To         *string           `json:"to,omitempty"`
+	Amount     int               `json:"amount"`
+	Offset     int               `json:"offset"`
+	Total      int               `json:"total"`
+	TotalVotes int               `json:"totalVotes"`
+	Winners    []rankEntry       `json:"winners"`
+	Rotation   *rankRotationInfo `json:"rotation,omitempty"`
 }
 
 // rankStats is the shared aggregation result for public and admin rankings.
@@ -494,6 +530,38 @@ func sortRankEntries(entries []rankEntry) {
 	})
 }
 
+// rankImages godoc
+// @Summary Get the public ranking
+// @Description Aggregates votes into a per-image leaderboard for the requested time window, honoring admin hide/derank decisions. Authentication is optional; it enables the mine/uploadedBy filters.
+// @Tags rank
+// @Produce json
+// @Param time query string false "Time window" Enums(day, week, month, year, all, custom)
+// @Param seconds query int false "Custom window size in seconds (when time=custom)"
+// @Param from query string false "Custom range start (RFC3339 or unix seconds)"
+// @Param to query string false "Custom range end (RFC3339 or unix seconds)"
+// @Param amount query int false "Page size (default 10, max 100)"
+// @Param offset query int false "Pagination offset"
+// @Param mode query string false "Vote mode name filter"
+// @Param author query string false "Author filter"
+// @Param titleRegex query string false "Title regex filter"
+// @Param visibility query string false "Visibility filter" Enums(all, public, private)
+// @Param service query string false "Public service name filter"
+// @Param uploadedBy query []string false "Uploader IDs or usernames (comma separated, 'me' allowed)" collectionFormat(csv)
+// @Param mine query bool false "Only images uploaded by the signed-in user"
+// @Param includeAuthors query []string false "Author allow-list regexes" collectionFormat(csv)
+// @Param excludeAuthors query []string false "Author deny-list regexes" collectionFormat(csv)
+// @Param includeTitles query []string false "Title allow-list regexes" collectionFormat(csv)
+// @Param excludeTitles query []string false "Title deny-list regexes" collectionFormat(csv)
+// @Param exclude query []string false "Image IDs to exclude from the fallback pool" collectionFormat(csv)
+// @Param rotation query bool false "Override the configured rotation of quiet ranking pages"
+// @Param rankRotation query bool false "Alias for rotation"
+// @Param rotationPercent query int false "Percentage of a page that should change between periods (0-100)"
+// @Param rankRotationPercent query int false "Alias for rotationPercent"
+// @Param changePercent query int false "Alias for rotationPercent"
+// @Success 200 {object} rankResponse
+// @Failure 400 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /images/rank [get]
 func (s *Server) rankImages(c *gin.Context) {
 	rng, err := parseRange(c)
 	if err != nil {
@@ -504,32 +572,21 @@ func (s *Server) rankImages(c *gin.Context) {
 	offset := parseOffset(c)
 	ctx := c.Request.Context()
 
-	policy, err := imageRequestPolicy(c)
-	if err != nil {
-		asStoreError(c, err)
-		return
-	}
-
-	votes, _, err := s.Store.ListVotes(ctx, store.VoteFilter{
-		From:       rng.From,
-		To:         rng.To,
-		Mode:       trimTo(c.Query("mode"), 64),
-		Author:     trimTo(c.Query("author"), 120),
-		TitleRegex: trimTo(c.Query("titleRegex"), 200),
-		Limit:      -1,
-	})
-	if err != nil {
-		asStoreError(c, err)
-		return
-	}
-
-	images, err := s.Store.GetImagesByIDs(ctx, collectVoteImageIDs(votes))
+	cfg, err := s.Store.GetAppConfig(ctx)
 	if err != nil {
 		serverError(c, err)
 		return
 	}
-
-	stats, totalVotes := computeRankStats(votes, images, policy.Hidden)
+	req, err := imageRequestFromQuery(c)
+	if err != nil {
+		badRequest(c, err.Error())
+		return
+	}
+	policy, err := store.CompileImageRequest(cfg, req)
+	if err != nil {
+		asStoreError(c, err)
+		return
+	}
 
 	modRows, err := moderationRows(c)
 	if err != nil {
@@ -537,29 +594,26 @@ func (s *Server) rankImages(c *gin.Context) {
 		return
 	}
 	window := store.ModerationWindowForLabel(rng.Label)
+	exclude := excludeIDSet(c)
 
-	entries := make([]rankEntry, 0, len(stats))
-	for _, st := range stats {
-		mod, hasMod := store.ModerationFor(modRows, st.image.ID, window)
-		if hasMod && mod.Hidden {
-			continue // hidden for this ranking period
-		}
-		entry := rankEntryFor(st)
-		entry.deranked = hasMod && mod.Deranked
-		entries = append(entries, entry)
+	baseFilter := store.VoteFilter{
+		Mode:       trimTo(c.Query("mode"), 64),
+		Author:     trimTo(c.Query("author"), 120),
+		TitleRegex: trimTo(c.Query("titleRegex"), 200),
+		Limit:      -1,
 	}
-	sortRankEntries(entries)
-	for i := range entries {
-		entries[i].Rank = i + 1
+	allEntries, totalVotes, err := s.rankEntriesForWindow(ctx, rng, baseFilter, policy, modRows, window, exclude)
+	if err != nil {
+		asStoreError(c, err)
+		return
 	}
+	total := len(allEntries)
+	currentPage := sliceRankEntries(allEntries, offset, amount)
 
-	total := len(entries)
-	if offset > len(entries) {
-		offset = len(entries)
-	}
-	entries = entries[offset:]
-	if len(entries) > amount {
-		entries = entries[:amount]
+	rotationEnabled, rotationPercent, err := rankRotationSettings(c, cfg)
+	if err != nil {
+		badRequest(c, err.Error())
+		return
 	}
 
 	resp := rankResponse{
@@ -568,18 +622,389 @@ func (s *Server) rankImages(c *gin.Context) {
 		Offset:     offset,
 		Total:      total,
 		TotalVotes: totalVotes,
-		Winners:    entries,
 	}
 	if rng.From != nil {
-		f := time.Unix(*rng.From, 0).UTC().Format(time.RFC3339)
-		resp.From = &f
+		resp.From = formatRangeTime(rng.From)
 	}
 	if rng.To != nil {
-		t := time.Unix(*rng.To, 0).UTC().Format(time.RFC3339)
-		resp.To = &t
+		resp.To = formatRangeTime(rng.To)
 	}
+
+	if rotationEnabled {
+		info := &rankRotationInfo{
+			Enabled: true,
+			Percent: rotationPercent,
+		}
+
+		var pool []store.Image
+		poolLoaded := false
+		loadPool := func() error {
+			if poolLoaded {
+				return nil
+			}
+			pool, err = s.rankCandidatePool(ctx, c, req, cfg, policy, modRows, window, exclude)
+			poolLoaded = true
+			return err
+		}
+
+		var baseline map[string]struct{}
+		var previousPage []rankEntry
+		if previousRange, ok := previousRangeWindow(rng); ok {
+			info.PreviousFrom = formatRangeTime(previousRange.From)
+			info.PreviousTo = formatRangeTime(previousRange.To)
+			previousEntries, _, err := s.rankEntriesForWindow(ctx, previousRange, baseFilter, policy, modRows, window, exclude)
+			if err != nil {
+				asStoreError(c, err)
+				return
+			}
+			previousPage = sliceRankEntries(previousEntries, offset, amount)
+			baseline = rankIDSet(previousPage)
+
+			// Reconstruct the likely previous rotated page so quiet periods do
+			// not keep selecting the same fallback images.
+			if len(previousPage) < amount {
+				if err := loadPool(); err != nil {
+					serverError(c, err)
+					return
+				}
+				ordered := rotationOrder(pool, previousRange, amount, offset)
+				for i := range ordered {
+					if len(previousPage) >= amount {
+						break
+					}
+					img := &ordered[i]
+					if _, seen := baseline[img.ID]; seen {
+						continue
+					}
+					baseline[img.ID] = struct{}{}
+					previousPage = append(previousPage, syntheticRankEntry(img))
+				}
+			}
+		} else {
+			baseline = make(map[string]struct{})
+		}
+
+		if err := loadPool(); err != nil {
+			serverError(c, err)
+			return
+		}
+		currentPage, info.Changed, info.Required = applyRankRotation(
+			currentPage, allEntries, offset, amount, baseline, pool, rng, rotationPercent,
+		)
+		// If the only possible candidates are already in the previous page,
+		// showing the previous page is better than returning nothing at all.
+		if len(currentPage) == 0 && len(previousPage) > 0 {
+			currentPage = previousPage
+			info.Changed = countRankOutside(currentPage, baseline)
+			info.Required = percentRequired(len(currentPage), rotationPercent)
+		}
+		info.Satisfied = info.Changed >= info.Required
+		resp.Rotation = info
+	}
+
+	for i := range currentPage {
+		currentPage[i].Rank = offset + i + 1
+	}
+	if minimum := offset + len(currentPage); total < minimum {
+		total = minimum
+	}
+	resp.Total = total
+	resp.Winners = currentPage
 	c.JSON(http.StatusOK, resp)
 }
+
+// --- rank rotation --------------------------------------------------------
+
+// rankEntriesForWindow computes the fully sorted ranking for one time window.
+// The filter and visibility policy are reused for the previous period so every
+// endpoint parameter (author, title regex, mode, visibility, uploader, regex
+// lists, excluded ids) applies consistently to both sides of the comparison.
+func (s *Server) rankEntriesForWindow(ctx context.Context, rng rangeWindow, filter store.VoteFilter, policy *store.VisibilityPolicy, modRows []store.ImageModeration, window string, exclude map[string]struct{}) ([]rankEntry, int, error) {
+	filter.From = rng.From
+	filter.To = rng.To
+	votes, _, err := s.Store.ListVotes(ctx, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+	images, err := s.Store.GetImagesByIDs(ctx, collectVoteImageIDs(votes))
+	if err != nil {
+		return nil, 0, err
+	}
+	stats, totalVotes := computeRankStats(votes, images, policy.Hidden)
+
+	entries := make([]rankEntry, 0, len(stats))
+	for _, st := range stats {
+		if _, skipped := exclude[st.image.ID]; skipped {
+			continue
+		}
+		mod, hasMod := store.ModerationFor(modRows, st.image.ID, window)
+		if hasMod && mod.Hidden {
+			continue
+		}
+		entry := rankEntryFor(st)
+		entry.deranked = hasMod && mod.Deranked
+		entries = append(entries, entry)
+	}
+	sortRankEntries(entries)
+	return entries, totalVotes, nil
+}
+
+// rankCandidatePool returns every live image matching the request filters. It
+// is used only when rotation is enabled and supplies zero-vote fallbacks when
+// a period has too few votes to produce a fresh page.
+func (s *Server) rankCandidatePool(ctx context.Context, c *gin.Context, req store.ImageRequest, cfg store.AppConfig, policy *store.VisibilityPolicy, modRows []store.ImageModeration, window string, exclude map[string]struct{}) ([]store.Image, error) {
+	visibility := req.Visibility
+	if visibility == "" {
+		visibility = cfg.DefaultImageVisibility
+	}
+	if visibility == "" {
+		visibility = store.VisibilityAll
+	}
+	images, _, err := s.Store.ListImages(ctx, store.ImageFilter{
+		Author:     trimTo(c.Query("author"), 120),
+		TitleRegex: trimTo(c.Query("titleRegex"), 200),
+		Visibility: visibility,
+		Service:    req.Service,
+		UploadedBy: req.UploadedBy,
+	})
+	if err != nil {
+		return nil, err
+	}
+	pool := make([]store.Image, 0, len(images))
+	for i := range images {
+		img := &images[i]
+		if _, skipped := exclude[img.ID]; skipped {
+			continue
+		}
+		if policy.Hidden(img) {
+			continue
+		}
+		if mod, ok := store.ModerationFor(modRows, img.ID, window); ok && (mod.Hidden || mod.Deranked) {
+			continue
+		}
+		pool = append(pool, *img)
+	}
+	return pool, nil
+}
+
+// applyRankRotation fills/replaces a page until at least percent of the
+// returned entries are absent from the previous period's page.
+func applyRankRotation(currentPage, allEntries []rankEntry, offset, amount int, baseline map[string]struct{}, pool []store.Image, rng rangeWindow, percent int) ([]rankEntry, int, int) {
+	if baseline == nil {
+		baseline = make(map[string]struct{})
+	}
+	final := append([]rankEntry(nil), currentPage...)
+	used := rankIDSet(final)
+
+	candidates := make([]rankEntry, 0, len(pool)+len(allEntries))
+	// Prefer images that were already ranked in the current period but sit
+	// beyond this page; they keep real win/loss numbers.
+	if start := offset + amount; start < len(allEntries) {
+		for i := start; i < len(allEntries); i++ {
+			entry := allEntries[i]
+			if _, stale := baseline[entry.ID]; stale {
+				continue
+			}
+			if _, exists := used[entry.ID]; exists {
+				continue
+			}
+			used[entry.ID] = struct{}{}
+			candidates = append(candidates, entry)
+		}
+	}
+	// Then fall back to the deterministic, window-seeded library rotation.
+	ordered := rotationOrder(pool, rng, amount, offset)
+	for i := range ordered {
+		img := &ordered[i]
+		if _, stale := baseline[img.ID]; stale {
+			continue
+		}
+		if _, exists := used[img.ID]; exists {
+			continue
+		}
+		used[img.ID] = struct{}{}
+		candidates = append(candidates, syntheticRankEntry(img))
+	}
+
+	candidateIndex := 0
+	for len(final) < amount && candidateIndex < len(candidates) {
+		final = append(final, candidates[candidateIndex])
+		candidateIndex++
+	}
+	sortRankEntries(final)
+	required := percentRequired(len(final), percent)
+	changed := countRankOutside(final, baseline)
+
+	// Replace the lowest-ranked entries that are still identical to the
+	// previous period until the minimum change share is met.
+	for changed < required {
+		replaceAt := -1
+		for i := len(final) - 1; i >= 0; i-- {
+			if _, stale := baseline[final[i].ID]; stale {
+				replaceAt = i
+				break
+			}
+		}
+		if replaceAt < 0 || candidateIndex >= len(candidates) {
+			break
+		}
+		final[replaceAt] = candidates[candidateIndex]
+		candidateIndex++
+		changed++
+	}
+	sortRankEntries(final)
+	return final, changed, required
+}
+
+func rankRotationSettings(c *gin.Context, cfg store.AppConfig) (bool, int, error) {
+	enabled := cfg.RankRotationEnabled
+	for _, key := range []string{"rotation", "rankRotation"} {
+		if value, ok := parseOptionalBool(c.Query(key)); ok {
+			enabled = value
+			break
+		}
+	}
+
+	percent := cfg.RankRotationPercent
+	if percent < 0 || percent > 100 {
+		percent = 60
+	}
+	raw := firstNonEmpty(c.Query("rotationPercent"), c.Query("rankRotationPercent"), c.Query("changePercent"))
+	if raw != "" {
+		n, err := strconv.Atoi(strings.TrimSpace(raw))
+		if err != nil || n < 0 || n > 100 {
+			return false, 0, fmt.Errorf("rotationPercent must be between 0 and 100")
+		}
+		percent = n
+	}
+	return enabled, percent, nil
+}
+
+func parseOptionalBool(raw string) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		return true, true
+	case "0", "false", "no", "off":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+func excludeIDSet(c *gin.Context) map[string]struct{} {
+	out := make(map[string]struct{})
+	for _, value := range c.QueryArray("exclude") {
+		for _, id := range strings.Split(value, ",") {
+			if id = strings.TrimSpace(id); id != "" {
+				out[id] = struct{}{}
+			}
+		}
+	}
+	return out
+}
+
+func previousRangeWindow(rng rangeWindow) (rangeWindow, bool) {
+	if rng.From == nil || rng.To == nil {
+		return rangeWindow{}, false
+	}
+	duration := *rng.To - *rng.From
+	if duration <= 0 {
+		return rangeWindow{}, false
+	}
+	previousTo := *rng.From - 1
+	previousFrom := previousTo - duration
+	return rangeWindow{Label: rng.Label, From: &previousFrom, To: &previousTo}, true
+}
+
+func sliceRankEntries(entries []rankEntry, offset, amount int) []rankEntry {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(entries) {
+		offset = len(entries)
+	}
+	page := entries[offset:]
+	if len(page) > amount {
+		page = page[:amount]
+	}
+	return append([]rankEntry(nil), page...)
+}
+
+func rankIDSet(entries []rankEntry) map[string]struct{} {
+	out := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		out[entry.ID] = struct{}{}
+	}
+	return out
+}
+
+func countRankOutside(entries []rankEntry, baseline map[string]struct{}) int {
+	changed := 0
+	for _, entry := range entries {
+		if _, stale := baseline[entry.ID]; !stale {
+			changed++
+		}
+	}
+	return changed
+}
+
+func percentRequired(count, percent int) int {
+	if count <= 0 || percent <= 0 {
+		return 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	return int(math.Ceil(float64(count) * float64(percent) / 100.0))
+}
+
+// rotationOrder returns a stable cyclic ordering of the candidate pool. The
+// start advances by the page size for every equivalent time window, which
+// makes consecutive quiet periods use different slices of the library instead
+// of re-shuffling from scratch.
+func rotationOrder(pool []store.Image, rng rangeWindow, amount, offset int) []store.Image {
+	if len(pool) == 0 {
+		return nil
+	}
+	if amount < 1 {
+		amount = 1
+	}
+	ordered := append([]store.Image(nil), pool...)
+	var index int64
+	if rng.From != nil && rng.To != nil {
+		if duration := *rng.To - *rng.From; duration > 0 {
+			index = *rng.From / duration
+		}
+	} else if rng.From != nil {
+		index = *rng.From
+	}
+	if index < 0 {
+		index = -index
+	}
+	start := int((index*int64(amount) + int64(offset)) % int64(len(ordered)))
+	if start < 0 {
+		start += len(ordered)
+	}
+	out := make([]store.Image, 0, len(ordered))
+	out = append(out, ordered[start:]...)
+	out = append(out, ordered[:start]...)
+	return out
+}
+
+func syntheticRankEntry(img *store.Image) rankEntry {
+	entry := rankEntryFor(&rankStats{image: img})
+	entry.Rotated = true
+	return entry
+}
+
+func formatRangeTime(v *int64) *string {
+	if v == nil {
+		return nil
+	}
+	formatted := time.Unix(*v, 0).UTC().Format(time.RFC3339)
+	return &formatted
+}
+
 func (s *Server) myVotes(c *gin.Context) {
 	user := currentUser(c)
 	rng, err := parseRange(c)

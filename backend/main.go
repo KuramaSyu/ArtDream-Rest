@@ -19,6 +19,16 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// @title ArtDream API
+// @version 1.0
+// @description REST API for uploading, browsing, voting on and ranking ArtDream artwork.
+// @description Authentication uses the session token returned by POST /auth/login. Send it as `Authorization: Bearer <token>`.
+// @BasePath /api/v1
+// @schemes http https
+// @securityDefinitions.apikey BearerAuth
+// @in header
+// @name Authorization
+// @description Session token prefixed with "Bearer ".
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
 	log.SetPrefix("artdream ")

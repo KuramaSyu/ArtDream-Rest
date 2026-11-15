@@ -163,6 +163,18 @@ CREATE INDEX IF NOT EXISTS votes_mode_idx ON votes(mode_id);
 	); err != nil {
 		return fmt.Errorf("seed image visibility default: %w", err)
 	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO app_config (key, value, updated_at) VALUES ('rank_rotation_enabled', 'false', ?)`,
+		now,
+	); err != nil {
+		return fmt.Errorf("seed rank rotation switch: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO app_config (key, value, updated_at) VALUES ('rank_rotation_percent', '60', ?)`,
+		now,
+	); err != nil {
+		return fmt.Errorf("seed rank rotation percent: %w", err)
+	}
 
 	modes := []struct {
 		name, description string

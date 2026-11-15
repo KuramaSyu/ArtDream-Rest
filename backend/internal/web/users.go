@@ -44,6 +44,15 @@ type sessionResponse struct {
 	User  *store.User `json:"user"`
 }
 
+// needsBootstrap godoc
+// @Summary Check whether the instance needs a first administrator
+// @Description Reports whether any account exists. The first account must be created through /users/bootstrap.
+// @Tags auth
+// @Produce json
+// @Success 200 {object} NeedsBootstrapResponse
+// @Failure 500 {object} apiError
+// @Router /users/needs-bootstrap [get]
+// @Router /config [get]
 func (s *Server) needsBootstrap(c *gin.Context) {
 	n, err := s.Store.CountUsers(c.Request.Context())
 	if err != nil {
@@ -53,6 +62,18 @@ func (s *Server) needsBootstrap(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"needsBootstrap": n == 0, "userCount": n})
 }
 
+// bootstrap godoc
+// @Summary Create the first administrator account
+// @Description Only succeeds while the instance has no accounts. Signs in the new administrator and returns a session token.
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param payload body createUserRequest true "Account details (isAdmin is forced to true)"
+// @Success 201 {object} sessionResponse
+// @Failure 400 {object} apiError
+// @Failure 409 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /users/bootstrap [post]
 func (s *Server) bootstrap(c *gin.Context) {
 	s.bootstrapMu.Lock()
 	defer s.bootstrapMu.Unlock()
@@ -108,6 +129,18 @@ func (s *Server) bootstrap(c *gin.Context) {
 
 // register creates a regular (non-admin) account. The first account must be
 // created through bootstrap so the instance always has an administrator.
+// register godoc
+// @Summary Register a regular account
+// @Description Creates a non-admin account. Requires that an administrator already exists.
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param payload body createUserRequest true "Account details"
+// @Success 201 {object} sessionResponse
+// @Failure 400 {object} apiError
+// @Failure 409 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /auth/register [post]
 func (s *Server) register(c *gin.Context) {
 	var req createUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -158,6 +191,18 @@ func (s *Server) register(c *gin.Context) {
 	c.JSON(http.StatusCreated, sessionResponse{Token: token, User: user})
 }
 
+// login godoc
+// @Summary Sign in
+// @Description Exchanges a username and password for a session token.
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param payload body loginRequest true "Credentials"
+// @Success 200 {object} sessionResponse
+// @Failure 400 {object} apiError
+// @Failure 401 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /auth/login [post]
 func (s *Server) login(c *gin.Context) {
 	var req loginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -198,6 +243,14 @@ func (s *Server) startSession(c *gin.Context, user *store.User) (string, error) 
 	return token, nil
 }
 
+// logout godoc
+// @Summary Sign out
+// @Description Deletes the current session token.
+// @Tags auth
+// @Security BearerAuth
+// @Produce json
+// @Success 200 {object} OKResponse
+// @Router /auth/logout [post]
 func (s *Server) logout(c *gin.Context) {
 	token, _ := c.Get(ctxTokenKey)
 	if t, ok := token.(string); ok {
@@ -206,10 +259,30 @@ func (s *Server) logout(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+// me godoc
+// @Summary Get the current account
+// @Tags auth
+// @Security BearerAuth
+// @Produce json
+// @Success 200 {object} UserResponse
+// @Failure 401 {object} apiError
+// @Router /auth/me [get]
 func (s *Server) me(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"user": currentUser(c)})
 }
 
+// updateMe godoc
+// @Summary Update the current account
+// @Description Changes the display name and/or password. A password change requires the current password.
+// @Tags auth
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param payload body updateMeRequest true "Fields to update"
+// @Success 200 {object} UserResponse
+// @Failure 400 {object} apiError
+// @Failure 401 {object} apiError
+// @Router /auth/me [patch]
 func (s *Server) updateMe(c *gin.Context) {
 	var req updateMeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -260,6 +333,17 @@ func (s *Server) updateMe(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"user": updated})
 }
 
+// listUsers godoc
+// @Summary List accounts
+// @Tags users
+// @Security BearerAuth
+// @Produce json
+// @Param amount query int false "Page size (default 200, max 500)"
+// @Param offset query int false "Pagination offset"
+// @Success 200 {object} UsersResponse
+// @Failure 401 {object} apiError
+// @Failure 403 {object} apiError
+// @Router /users [get]
 func (s *Server) listUsers(c *gin.Context) {
 	users, total, err := s.Store.ListUsers(c.Request.Context(), store.UserFilter{
 		Limit:  parseAmount(c, 200, 500),
@@ -272,6 +356,19 @@ func (s *Server) listUsers(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": users, "total": total})
 }
 
+// createUser godoc
+// @Summary Create an account
+// @Tags users
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param payload body createUserRequest true "New account"
+// @Success 201 {object} UserResponse
+// @Failure 400 {object} apiError
+// @Failure 401 {object} apiError
+// @Failure 403 {object} apiError
+// @Failure 409 {object} apiError
+// @Router /users [post]
 func (s *Server) createUser(c *gin.Context) {
 	var req createUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -307,6 +404,22 @@ func (s *Server) createUser(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"user": user})
 }
 
+// updateUser godoc
+// @Summary Update an account
+// @Description Changes the display name, password and/or administrator flag. At least one administrator must remain.
+// @Tags users
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path int true "User ID"
+// @Param payload body updateUserRequest true "Fields to update"
+// @Success 200 {object} UserResponse
+// @Failure 400 {object} apiError
+// @Failure 401 {object} apiError
+// @Failure 403 {object} apiError
+// @Failure 404 {object} apiError
+// @Failure 409 {object} apiError
+// @Router /users/{id} [patch]
 func (s *Server) updateUser(c *gin.Context) {
 	id, ok := parseIDParam(c, "id")
 	if !ok {
@@ -368,6 +481,20 @@ func (s *Server) updateUser(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"user": updated})
 }
 
+// deleteUser godoc
+// @Summary Delete an account
+// @Description Deletes an account. You cannot delete yourself, and at least one administrator must remain.
+// @Tags users
+// @Security BearerAuth
+// @Produce json
+// @Param id path int true "User ID"
+// @Success 200 {object} DeleteUserResponse
+// @Failure 400 {object} apiError
+// @Failure 401 {object} apiError
+// @Failure 403 {object} apiError
+// @Failure 404 {object} apiError
+// @Failure 409 {object} apiError
+// @Router /users/{id} [delete]
 func (s *Server) deleteUser(c *gin.Context) {
 	id, ok := parseIDParam(c, "id")
 	if !ok {

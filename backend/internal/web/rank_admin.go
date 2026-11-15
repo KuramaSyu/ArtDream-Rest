@@ -57,6 +57,28 @@ type adminRankResponse struct {
 // adminRankImages returns exact per-image numbers for any period, including
 // the moderation state that applies to that period. Unlike the public
 // ranking, hidden images are included (flagged) unless includeHidden=false.
+// adminRankImages godoc
+// @Summary Get the admin ranking
+// @Description Returns exact per-image numbers for any period, including hidden and deranked images flagged in the response.
+// @Tags admin
+// @Security BearerAuth
+// @Produce json
+// @Param time query string false "Time window" Enums(day, week, month, year, all, custom)
+// @Param seconds query int false "Custom window size in seconds (when time=custom)"
+// @Param from query string false "Custom range start (RFC3339 or unix seconds)"
+// @Param to query string false "Custom range end (RFC3339 or unix seconds)"
+// @Param amount query int false "Page size (default 100, max 500)"
+// @Param offset query int false "Pagination offset"
+// @Param mode query string false "Vote mode name filter"
+// @Param author query string false "Author substring filter"
+// @Param titleRegex query string false "Title regex filter"
+// @Param includeHidden query bool false "Include hidden images in the result (default true)"
+// @Success 200 {object} adminRankResponse
+// @Failure 400 {object} apiError
+// @Failure 401 {object} apiError
+// @Failure 403 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /admin/rank [get]
 func (s *Server) adminRankImages(c *gin.Context) {
 	rng, err := parseRange(c)
 	if err != nil {
@@ -279,6 +301,17 @@ func filtersFromConfig(cfg store.AppConfig) rankFiltersDTO {
 	return out
 }
 
+// getRankFilters godoc
+// @Summary Get ranking filter lists (admin)
+// @Description Returns the allow/deny regex lists that hide images from public API results.
+// @Tags admin
+// @Security BearerAuth
+// @Produce json
+// @Success 200 {object} rankFiltersDTO
+// @Failure 401 {object} apiError
+// @Failure 403 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /admin/rank/filters [get]
 func (s *Server) getRankFilters(c *gin.Context) {
 	cfg, err := s.Store.GetAppConfig(c.Request.Context())
 	if err != nil {
@@ -288,6 +321,20 @@ func (s *Server) getRankFilters(c *gin.Context) {
 	c.JSON(http.StatusOK, filtersFromConfig(cfg))
 }
 
+// updateRankFilters godoc
+// @Summary Update ranking filter lists (admin)
+// @Description Replaces the supplied allow/deny regex lists. List values must be valid regular expressions.
+// @Tags admin
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param payload body rankFiltersRequest true "Filter lists to replace"
+// @Success 200 {object} rankFiltersDTO
+// @Failure 400 {object} apiError
+// @Failure 401 {object} apiError
+// @Failure 403 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /admin/rank/filters [patch]
 func (s *Server) updateRankFilters(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64<<10)
 	var req rankFiltersRequest
@@ -351,6 +398,22 @@ type moderationRequest struct {
 	Note       *string `json:"note"`
 }
 
+// updateImageModeration godoc
+// @Summary Set image moderation for a period (admin)
+// @Description Hides and/or deranks an image for one ranking window without deleting it.
+// @Tags admin
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path string true "Image ID"
+// @Param payload body moderationRequest true "Moderation decision"
+// @Success 200 {object} store.ImageModeration
+// @Failure 400 {object} apiError
+// @Failure 401 {object} apiError
+// @Failure 403 {object} apiError
+// @Failure 404 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /admin/images/{id}/moderation [patch]
 func (s *Server) updateImageModeration(c *gin.Context) {
 	id := strings.TrimSpace(c.Param("id"))
 	if id == "" {
@@ -407,6 +470,20 @@ func (s *Server) updateImageModeration(c *gin.Context) {
 	c.JSON(http.StatusOK, mod)
 }
 
+// deleteImageModeration godoc
+// @Summary Clear image moderation for a period (admin)
+// @Tags admin
+// @Security BearerAuth
+// @Produce json
+// @Param id path string true "Image ID"
+// @Param timeWindow query string false "Ranking period (default all)" Enums(all, day, week, month, year)
+// @Success 200 {object} ModerationDeleteResponse
+// @Failure 400 {object} apiError
+// @Failure 401 {object} apiError
+// @Failure 403 {object} apiError
+// @Failure 404 {object} apiError
+// @Failure 500 {object} apiError
+// @Router /admin/images/{id}/moderation [delete]
 func (s *Server) deleteImageModeration(c *gin.Context) {
 	id := strings.TrimSpace(c.Param("id"))
 	if id == "" {
