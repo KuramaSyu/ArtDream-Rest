@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { alpha } from "@mui/material/styles";
 import {
   Avatar,
   Box,
@@ -84,10 +85,8 @@ export function Navigation({ floating = false }: NavigationProps) {
         alignItems: "center",
         gap: 2,
         background: floating
-          ? "linear-gradient(180deg, rgba(8,7,12,.6), rgba(8,7,12,0))"
-          : theme.palette.mode === "dark"
-            ? "rgba(10,9,15,.92)"
-            : "rgba(255,255,255,.92)",
+          ? `linear-gradient(180deg, ${alpha(theme.palette.background.default, 0.6)}, ${alpha(theme.palette.background.default, 0)})`
+          : alpha(theme.palette.background.paper, 0.92),
         borderBottom: floating ? "none" : `1px solid ${theme.palette.divider}`,
       }}
     >
@@ -110,15 +109,10 @@ export function Navigation({ floating = false }: NavigationProps) {
               borderRadius: 99,
               color: active(link.to) ? "text.primary" : "text.secondary",
               background: active(link.to)
-                ? theme.palette.mode === "dark"
-                  ? "rgba(255,255,255,.12)"
-                  : "rgba(0,0,0,.07)"
+                ? alpha(theme.palette.text.primary, 0.12)
                 : "transparent",
               "&:hover": {
-                background:
-                  theme.palette.mode === "dark"
-                    ? "rgba(255,255,255,.1)"
-                    : "rgba(0,0,0,.05)",
+                background: alpha(theme.palette.text.primary, 0.08),
                 transform: "translateY(-1px)",
               },
               transition: "all 200ms ease",
@@ -191,10 +185,10 @@ export function Navigation({ floating = false }: NavigationProps) {
             size="small"
             sx={{
               color: "text.primary",
-              background: "rgba(255,255,255,.07)",
+              background: alpha(theme.palette.text.primary, 0.07),
               transition: "transform 300ms ease, background 300ms ease",
               "&:hover": {
-                background: "rgba(255,255,255,.16)",
+                background: alpha(theme.palette.text.primary, 0.16),
                 transform: "rotate(18deg) scale(1.08)",
               },
             }}

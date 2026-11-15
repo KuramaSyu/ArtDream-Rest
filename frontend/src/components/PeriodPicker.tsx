@@ -1,4 +1,4 @@
-import { Box, ToggleButton, ToggleButtonGroup, Tooltip } from "@mui/material";
+import { Box, ToggleButton, ToggleButtonGroup, Tooltip, alpha, useTheme } from "@mui/material";
 import type { ReactNode } from "react";
 import type { TimeRange } from "../api/types";
 
@@ -19,6 +19,8 @@ export function PeriodPicker({
   onChange: (value: TimeRange) => void;
   leading?: ReactNode;
 }) {
+  const theme = useTheme();
+  const text = theme.palette.text.primary;
   return (
     <Box
       className="period-dock"
@@ -33,26 +35,26 @@ export function PeriodPicker({
         }}
         aria-label="Choose ranking period"
         sx={{
-          background: "rgba(10,9,15,.42)",
+          background: alpha(theme.palette.background.paper, 0.55),
           backdropFilter: "blur(14px)",
           borderRadius: 99,
           p: 0.4,
-          border: "1px solid rgba(255,255,255,.14)",
+          border: `1px solid ${alpha(text, 0.14)}`,
           "& .MuiToggleButton-root": {
             border: 0,
             borderRadius: 99,
             px: 1.3,
             py: 0.25,
-            color: "rgba(255,255,255,.75)",
+            color: alpha(text, 0.75),
             fontSize: "0.7rem",
             letterSpacing: "0.05em",
             textTransform: "none",
             transition: "all 200ms ease",
-            "&:hover": { background: "rgba(255,255,255,.1)", color: "#fff" },
+            "&:hover": { background: alpha(text, 0.1), color: text },
             "&.Mui-selected": {
-              background: "rgba(255,255,255,.2)",
-              color: "#fff",
-              "&:hover": { background: "rgba(255,255,255,.24)" },
+              background: alpha(theme.palette.primary.main, 0.75),
+              color: theme.palette.getContrastText(theme.palette.primary.main),
+              "&:hover": { background: alpha(theme.palette.primary.main, 0.88) },
             },
           },
         }}

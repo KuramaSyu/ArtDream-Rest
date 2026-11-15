@@ -4,7 +4,6 @@ import {
   Box,
   alpha,
   useTheme,
-  Button,
   CircularProgress,
   IconButton,
   InputAdornment,
@@ -33,6 +32,7 @@ import { useAuth } from "../auth/AuthContext";
 import { Logo } from "../components/Logo";
 import { Navigation } from "../components/Navigation";
 import { PeriodPicker } from "../components/PeriodPicker";
+import { ThemeButton } from "../components/ThemeButton";
 import { useToast } from "../components/Feedback";
 import { useStageImages } from "../theme/ThemeHost";
 import { periodLabel } from "../utils/format";
@@ -65,6 +65,9 @@ export function LandingPage() {
   const { user, needsBootstrap, status, bootstrap } = useAuth();
   const navigate = useNavigate();
   const theme = useTheme();
+  const text = theme.palette.text.primary;
+  const primary = theme.palette.primary.main;
+  const secondary = theme.palette.secondary.main;
   const { notify } = useToast();
   const { config: frontendConfig, loading: frontendConfigLoading } = useFrontendConfig();
   const rankingAnonymized = frontendConfig.rankingAnonymized;
@@ -185,7 +188,19 @@ export function LandingPage() {
       <Box
         className="landing-background"
         aria-hidden
-        sx={{ background: theme.palette.background.default }}
+        sx={{
+          background: theme.palette.background.default,
+          "&::after": {
+            content: '""',
+            position: "absolute",
+            inset: 0,
+            pointerEvents: "none",
+            background: `
+              radial-gradient(1200px 780px at 50% 42%, ${alpha(theme.palette.common.black, 0.04)}, ${alpha(theme.palette.common.black, 0.42)} 100%),
+              linear-gradient(180deg, ${alpha(theme.palette.common.black, 0.1)}, ${alpha(theme.palette.common.black, 0.38)})
+            `,
+          },
+        }}
       >
         <AnimatePresence initial={false}>
           {current && (
@@ -217,8 +232,8 @@ export function LandingPage() {
             inset: 0,
             pointerEvents: "none",
             background: `
-              radial-gradient(1100px 760px at 16% 8%, ${alpha(theme.palette.primary.main, 0.42)} 0%, transparent 62%),
-              radial-gradient(950px 820px at 88% 32%, ${alpha(theme.palette.secondary.main, 0.34)} 0%, transparent 66%),
+              radial-gradient(1100px 760px at 16% 8%, ${alpha(primary, 0.42)} 0%, transparent 62%),
+              radial-gradient(950px 820px at 88% 32%, ${alpha(secondary, 0.34)} 0%, transparent 66%),
               linear-gradient(155deg, ${alpha(theme.palette.primary.dark, 0.22)} 0%, transparent 52%, ${alpha(theme.palette.secondary.dark, 0.26)} 100%)
             `,
           }}
@@ -228,8 +243,11 @@ export function LandingPage() {
             sx={{
               position: "absolute",
               inset: 0,
-              background:
-                "radial-gradient(900px 600px at 20% 20%, rgba(143,188,187,.25), transparent 60%), radial-gradient(800px 700px at 85% 30%, rgba(180,142,173,.22), transparent 65%), #0d0b12",
+              background: `
+                radial-gradient(900px 600px at 20% 20%, ${alpha(primary, 0.25)}, transparent 60%),
+                radial-gradient(800px 700px at 85% 30%, ${alpha(secondary, 0.22)}, transparent 65%),
+                ${theme.palette.background.default}
+              `,
             }}
           />
         )}
@@ -269,14 +287,14 @@ export function LandingPage() {
               transition={{ duration: 1, ease: [0.2, 0.9, 0.2, 1] }}
             >
               <Box
-                className="display brand-glow"
+                className="display"
                 sx={{
                   fontSize: "clamp(3.4rem, 13vw, 10.5rem)",
                   lineHeight: 0.88,
                   fontWeight: 600,
                   letterSpacing: "-0.055em",
                   mb: 2,
-                  textShadow: `0 0 34px ${alpha(theme.palette.primary.main, 0.5)}, 0 8px 40px rgba(0,0,0,.4)`,
+                  textShadow: `0 0 34px ${alpha(primary, 0.5)}, 0 8px 40px ${alpha(theme.palette.common.black, 0.4)}`,
                 }}
               >
                 ArtDream
@@ -284,7 +302,7 @@ export function LandingPage() {
               <Typography
                 sx={{
                   fontSize: "clamp(1rem, 2.1vw, 1.35rem)",
-                  color: "rgba(255,255,255,.76)",
+                  color: alpha(text, 0.76),
                   letterSpacing: "0.02em",
                   mb: 1,
                 }}
@@ -294,7 +312,7 @@ export function LandingPage() {
               <Typography
                 sx={{
                   fontSize: "0.8rem",
-                  color: "rgba(255,255,255,.5)",
+                  color: alpha(text, 0.52),
                   letterSpacing: "0.16em",
                   textTransform: "uppercase",
                   mb: { xs: 4, md: 6 },
@@ -313,65 +331,35 @@ export function LandingPage() {
                   flexWrap: "wrap",
                 }}
               >
-                <Button
+                <ThemeButton
+                  tone="hero"
+                  glow
                   onClick={start}
-                  variant="contained"
                   size="large"
-                  className="hero-cta pulse-glow"
                   endIcon={<ArrowForwardRounded />}
-                  sx={{
-                    px: 4.5,
-                    py: 1.6,
-                    borderRadius: 99,
-                    fontSize: "1.02rem",
-                    fontWeight: 750,
-                    textTransform: "none",
-                    boxShadow: "0 22px 60px rgba(0,0,0,.45)",
-                    "&:hover": {
-                      transform: "translateY(-2px) scale(1.015)",
-                      boxShadow: "0 28px 70px rgba(0,0,0,.5)",
-                    },
-                  }}
                 >
                   Rank images
-                </Button>
-                <Button
+                </ThemeButton>
+                <ThemeButton
+                  tone="glass"
                   onClick={() => navigate("/submit")}
                   size="large"
                   startIcon={<CloudUploadOutlined />}
-                  sx={{
-                    px: 3,
-                    py: 1.6,
-                    borderRadius: 99,
-                    textTransform: "none",
-                    fontWeight: 600,
-                    color: "#fff",
-                    borderColor: "rgba(255,255,255,.32)",
-                    "&:hover": {
-                      borderColor: "rgba(255,255,255,.7)",
-                      background: "rgba(255,255,255,.09)",
-                    },
-                  }}
-                  variant="outlined"
                 >
                   Submit art
-                </Button>
+                </ThemeButton>
               </Box>
 
               {!user && !needsSetup && (
                 <Box sx={{ mt: 2.6, display: "flex", gap: 2, justifyContent: "center" }}>
-                  <Button
+                  <ThemeButton
+                    tone="ghost"
                     onClick={() => navigate("/login?next=/rank")}
                     size="small"
                     startIcon={<LoginRounded sx={{ fontSize: 16 }} />}
-                    sx={{
-                      color: "rgba(255,255,255,.65)",
-                      textTransform: "none",
-                      "&:hover": { color: "#fff" },
-                    }}
                   >
                     Sign in to keep your votes
-                  </Button>
+                  </ThemeButton>
                 </Box>
               )}
             </motion.div>
@@ -395,8 +383,9 @@ export function LandingPage() {
             px: 1.8,
             py: 1.1,
             borderRadius: 99,
-            background: "rgba(10,9,15,.62)",
-            border: "1px solid rgba(255,255,255,.12)",
+            background: alpha(theme.palette.background.paper, 0.72),
+            border: `1px solid ${alpha(text, 0.12)}`,
+            backdropFilter: "blur(14px)",
           }}
         >
           <Box
@@ -405,7 +394,7 @@ export function LandingPage() {
               fontSize: "0.68rem",
               letterSpacing: "0.08em",
               textTransform: "uppercase",
-              color: "rgba(255,255,255,.52)",
+              color: alpha(text, 0.52),
             }}
           >
             {index + 1}/{slides.length}
@@ -415,7 +404,7 @@ export function LandingPage() {
               width: "1px",
               flexShrink: 0,
               height: 16,
-              background: "rgba(255,255,255,.18)",
+              background: alpha(text, 0.18),
             }}
           />
           {(current.title || (!currentAuthorHidden && current.author)) && (
@@ -429,7 +418,7 @@ export function LandingPage() {
                 </Typography>
               )}
               {!currentAuthorHidden && current.author && (
-                <Typography noWrap sx={{ fontSize: "0.78rem", color: "rgba(255,255,255,.62)" }}>
+                <Typography noWrap sx={{ fontSize: "0.78rem", color: alpha(text, 0.62) }}>
                   by {current.author}
                 </Typography>
               )}
@@ -443,8 +432,8 @@ export function LandingPage() {
                   aria-label="Previous artwork"
                   onClick={() => goToSlide(-1)}
                   sx={{
-                    color: "rgba(255,255,255,.74)",
-                    "&:hover": { background: "rgba(255,255,255,.1)", color: "#fff" },
+                    color: alpha(text, 0.74),
+                    "&:hover": { background: alpha(text, 0.1), color: text },
                   }}
                 >
                   <ChevronLeftRounded fontSize="small" />
@@ -456,8 +445,8 @@ export function LandingPage() {
                   aria-label="Next artwork"
                   onClick={() => goToSlide(1)}
                   sx={{
-                    color: "rgba(255,255,255,.74)",
-                    "&:hover": { background: "rgba(255,255,255,.1)", color: "#fff" },
+                    color: alpha(text, 0.74),
+                    "&:hover": { background: alpha(text, 0.1), color: text },
                   }}
                 >
                   <ChevronRightRounded fontSize="small" />
@@ -466,9 +455,9 @@ export function LandingPage() {
             </Box>
           )}
           {!loadingSlides && slides.length === 0 && (
-            <Button size="small" onClick={() => setReloadToken((n) => n + 1)}>
+            <ThemeButton tone="ghost" size="small" onClick={() => setReloadToken((n) => n + 1)}>
               retry
-            </Button>
+            </ThemeButton>
           )}
         </Box>
       )}
@@ -484,13 +473,16 @@ export function LandingPage() {
             height: 3,
             zIndex: 35,
             pointerEvents: "none",
-            background: "rgba(255,255,255,.16)",
+            background: alpha(text, 0.16),
           }}
         >
           <Box
             key={`${period}-${index}-${current?.id ?? ""}`}
             className="slide-progress-fill"
-            sx={{ animationDuration: `${SLIDE_INTERVAL_MS}ms` }}
+            sx={{
+              animationDuration: `${SLIDE_INTERVAL_MS}ms`,
+              background: alpha(text, 0.62),
+            }}
           />
         </Box>
       )}
@@ -508,7 +500,9 @@ export function LandingPage() {
               }
               enterDelay={400}
             >
-              <Button
+              <ThemeButton
+                tone="pill"
+                active={todayOnly}
                 size="small"
                 aria-pressed={todayOnly}
                 onClick={() => {
@@ -516,51 +510,22 @@ export function LandingPage() {
                   setIndex(0);
                 }}
                 startIcon={<TodayRounded sx={{ fontSize: 16 }} />}
-                sx={{
-                  minWidth: 0,
-                  px: 1.2,
-                  py: 0.25,
-                  borderRadius: 99,
-                  textTransform: "none",
-                  fontSize: "0.7rem",
-                  fontWeight: 600,
-                  color: todayOnly ? "#fff" : "rgba(255,255,255,.8)",
-                  background: todayOnly
-                    ? "rgba(255,255,255,.22)"
-                    : "rgba(10,9,15,.42)",
-                  border: "1px solid rgba(255,255,255,.14)",
-                  "& .MuiButton-startIcon": { mr: 0.5 },
-                  "&:hover": { background: "rgba(255,255,255,.1)", color: "#fff" },
-                }}
               >
                 Today
-              </Button>
+              </ThemeButton>
             </Tooltip>
             <Tooltip
               title={`Backdrop resolution — ${quality === "original" ? "original" : `${quality}p`}`}
               enterDelay={400}
             >
-              <Button
+              <ThemeButton
+                tone="pill"
                 size="small"
                 onClick={(event) => setQualityMenu(event.currentTarget)}
                 startIcon={<HighQualityRounded sx={{ fontSize: 16 }} />}
-                sx={{
-                  minWidth: 0,
-                  px: 1.2,
-                  py: 0.25,
-                  borderRadius: 99,
-                  textTransform: "none",
-                  fontSize: "0.7rem",
-                  fontWeight: 600,
-                  color: "rgba(255,255,255,.8)",
-                  background: "rgba(10,9,15,.42)",
-                  border: "1px solid rgba(255,255,255,.14)",
-                  "& .MuiButton-startIcon": { mr: 0.5 },
-                  "&:hover": { background: "rgba(255,255,255,.1)", color: "#fff" },
-                }}
               >
                 {quality === "original" ? "Orig" : `${quality}p`}
-              </Button>
+              </ThemeButton>
             </Tooltip>
             <Menu
               anchorEl={qualityMenu}
@@ -613,6 +578,7 @@ function BootstrapPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const { notify } = useToast();
+  const theme = useTheme();
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -656,7 +622,16 @@ function BootstrapPanel({
         transition={{ duration: 0.8, ease: [0.2, 0.9, 0.2, 1] }}
         style={{ width: "min(480px, 100%)" }}
       >
-        <Box className="glass-strong" sx={{ borderRadius: 6, p: { xs: 3, sm: 4.5 } }}>
+        <Box
+          sx={{
+            borderRadius: 6,
+            p: { xs: 3, sm: 4.5 },
+            background: alpha(theme.palette.background.paper, 0.94),
+            border: `1px solid ${alpha(theme.palette.text.primary, 0.14)}`,
+            boxShadow: `0 24px 64px ${alpha(theme.palette.common.black, 0.45)}`,
+            backdropFilter: "blur(18px)",
+          }}
+        >
           <Logo size="lg" to={undefined} className="display" />
           <Typography
             className="display"
@@ -713,17 +688,17 @@ function BootstrapPanel({
                 {error}
               </Alert>
             )}
-            <Button
+            <ThemeButton
               type="submit"
-              variant="contained"
+              tone="hero"
               size="large"
               disabled={loading}
               disableElevation
               endIcon={loading ? <CircularProgress size={18} color="inherit" /> : <ArrowForwardRounded />}
-              sx={{ mt: 0.6, borderRadius: 99, py: 1.2, textTransform: "none", fontWeight: 700 }}
+              sx={{ mt: 0.6 }}
             >
               {loading ? "Lighting up…" : "Begin"}
-            </Button>
+            </ThemeButton>
           </Box>
 
           <Box sx={{ mt: 2.4, display: "flex", justifyContent: "center" }}>

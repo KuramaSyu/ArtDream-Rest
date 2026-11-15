@@ -1,4 +1,4 @@
-import { Box, Typography } from "@mui/material";
+import { Box, Typography, alpha, useTheme } from "@mui/material";
 import { Link as RouterLink } from "react-router-dom";
 
 interface LogoProps {
@@ -14,6 +14,7 @@ const sizes = {
 } as const;
 
 export function Logo({ to = "/", size = "md", className }: LogoProps) {
+  const theme = useTheme();
   const spec = sizes[size];
   const content = (
     <Typography
@@ -29,7 +30,7 @@ export function Logo({ to = "/", size = "md", className }: LogoProps) {
         display: "inline-flex",
         alignItems: "flex-end",
         gap: 0.35,
-        textShadow: "0 10px 34px rgba(0,0,0,.35)",
+        textShadow: `0 10px 34px ${alpha(theme.palette.common.black, 0.35)}`,
         "&:hover .logo-dot": {
           transform: "translateY(-5px) scale(1.35)",
           borderRadius: "40% 60% 55% 45%",
@@ -44,8 +45,7 @@ export function Logo({ to = "/", size = "md", className }: LogoProps) {
           width: spec.dot,
           height: spec.dot,
           borderRadius: "50%",
-          background:
-            "linear-gradient(135deg, currentColor 15%, rgba(255,255,255,.5))",
+          background: `linear-gradient(135deg, ${theme.palette.primary.main} 15%, ${alpha(theme.palette.text.primary, 0.55)})`,
           marginBottom: spec.dot * 0.6,
           transition: "transform 360ms cubic-bezier(.2,.9,.2,1.4), border-radius 360ms ease",
         }}

@@ -110,11 +110,6 @@ a {
   letter-spacing: -0.03em;
 }
 
-.brand-glow {
-  text-shadow:
-    0 0 26px rgba(255, 255, 255, 0.22),
-    0 8px 40px rgba(0, 0, 0, 0.4);
-}
 
 .tilt-card {
   transition:
@@ -165,7 +160,6 @@ a {
   height: 100%;
   transform-origin: left center;
   transform: scaleX(0);
-  background: rgba(255, 255, 255, 0.62);
   animation-name: slide-progress;
   animation-timing-function: linear;
   animation-fill-mode: forwards;
@@ -201,20 +195,6 @@ a {
 
 .bob {
   animation: bob 5.5s ease-in-out infinite;
-}
-
-@keyframes pulse-glow {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.24);
-  }
-  50% {
-    box-shadow: 0 0 32px 6px rgba(255, 255, 255, 0.14);
-  }
-}
-
-.pulse-glow {
-  animation: pulse-glow 4s ease-in-out infinite;
 }
 
 @keyframes shake-pop {
@@ -309,7 +289,6 @@ a {
   inset: 0;
   z-index: 0;
   overflow: hidden;
-  background: #0d0b12;
   pointer-events: none;
 }
 
@@ -326,16 +305,6 @@ a {
   will-change: transform;
 }
 
-.landing-background::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(1200px 780px at 50% 42%, rgba(0, 0, 0, 0.04), rgba(0, 0, 0, 0.42) 100%),
-    linear-gradient(180deg, rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.38));
-  pointer-events: none;
-}
-
 .period-dock {
   position: fixed;
   right: clamp(12px, 2.5vw, 28px);
@@ -349,29 +318,6 @@ a {
 .period-dock:focus-within {
   opacity: 1;
   transform: translateY(-2px);
-}
-
-.hero-cta {
-  position: relative;
-  overflow: hidden;
-}
-
-.hero-cta::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    110deg,
-    transparent 20%,
-    rgba(255, 255, 255, 0.26) 48%,
-    transparent 72%
-  );
-  transform: translateX(-130%);
-  transition: transform 700ms ease;
-}
-
-.hero-cta:hover::after {
-  transform: translateX(130%);
 }
 
 .submit-drop {
