@@ -20,7 +20,7 @@ import {
 } from "@mui/icons-material";
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
-import { api, ApiError, imageVariant, resolveImageUrl } from "../api/client";
+import { api, ApiError, imageVariant } from "../api/client";
 import type { ImageItem } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { EmptyState, LoadingView } from "../components/Loading";
@@ -198,7 +198,7 @@ export function LibraryPage() {
                 <Box sx={{ position: "relative", aspectRatio: "4 / 3", overflow: "hidden" }}>
                   <Box
                     component="img"
-                    src={imageVariant(image.url, { w: 640, quality: 82 })}
+                    src={imageVariant(image.url, { w: 640, quality: 78 })}
                     alt={image.title || `Artwork by ${image.author}`}
                     loading="lazy"
                     sx={{
@@ -216,13 +216,15 @@ export function LibraryPage() {
                     }}
                   />
                   <Box sx={{ position: "absolute", left: 12, bottom: 10, right: 12 }}>
-                    <Typography
-                      className="display"
-                      noWrap
-                      sx={{ fontWeight: 620, fontSize: "1.15rem", color: "#fff" }}
-                    >
-                      {image.title || "Untitled dream"}
-                    </Typography>
+                    {image.title && (
+                      <Typography
+                        className="display"
+                        noWrap
+                        sx={{ fontWeight: 620, fontSize: "1.15rem", color: "#fff" }}
+                      >
+                        {image.title}
+                      </Typography>
+                    )}
                     <Typography
                       noWrap
                       sx={{ color: "rgba(255,255,255,.68)", fontSize: "0.76rem", letterSpacing: "0.04em" }}
@@ -255,7 +257,7 @@ export function LibraryPage() {
                 fontWeight: 650,
               }}
             >
-              {selected.title || "Untitled dream"}
+              {selected.title || selected.author}
               <IconButton
                 onClick={() => setSelected(null)}
                 sx={{ position: "absolute", right: 12, top: 12 }}
@@ -267,7 +269,7 @@ export function LibraryPage() {
             <DialogContent>
               <Box
                 component="img"
-                src={imageVariant(selected.url, { w: 1600, quality: 90 })}
+                src={imageVariant(selected.url, { h: 1080, quality: 85 })}
                 alt={selected.title || selected.author}
                 sx={{ width: "100%", borderRadius: 3, display: "block", mb: 2 }}
               />
@@ -294,7 +296,7 @@ export function LibraryPage() {
                         size="small"
                         variant="outlined"
                         startIcon={<DownloadRounded />}
-                        href={`${resolveImageUrl(selected.url)}?format=${format}&download=true`}
+                        href={imageVariant(selected.url, { format, download: true })}
                         download
                         sx={{ borderRadius: 99, textTransform: "none" }}
                       >
@@ -302,6 +304,18 @@ export function LibraryPage() {
                       </Button>
                     </Tooltip>
                   ))}
+                  <Tooltip title="Download the pristine upload (large)">
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      startIcon={<DownloadRounded />}
+                      href={imageVariant(selected.url, { original: true, download: true })}
+                      download
+                      sx={{ borderRadius: 99, textTransform: "none" }}
+                    >
+                      original
+                    </Button>
+                  </Tooltip>
                 </Box>
               </Box>
             </DialogContent>

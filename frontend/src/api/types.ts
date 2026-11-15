@@ -97,6 +97,12 @@ export interface ListResponse<T> {
   total: number;
 }
 
+/** Server-backed display decisions enforced by the frontend. */
+export interface FrontendConfig {
+  rankingAnonymized: boolean;
+  updatedAt?: string;
+}
+
 export type TimeRange = "day" | "week" | "month" | "year" | "all" | "custom";
 
 export interface RankQuery {

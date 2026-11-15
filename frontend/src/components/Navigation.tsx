@@ -84,11 +84,10 @@ export function Navigation({ floating = false }: NavigationProps) {
         alignItems: "center",
         gap: 2,
         background: floating
-          ? "linear-gradient(180deg, rgba(8,7,12,.55), rgba(8,7,12,0))"
+          ? "linear-gradient(180deg, rgba(8,7,12,.6), rgba(8,7,12,0))"
           : theme.palette.mode === "dark"
-            ? "rgba(10,9,15,.62)"
-            : "rgba(255,255,255,.62)",
-        backdropFilter: floating ? "none" : "blur(18px) saturate(1.3)",
+            ? "rgba(10,9,15,.92)"
+            : "rgba(255,255,255,.92)",
         borderBottom: floating ? "none" : `1px solid ${theme.palette.divider}`,
       }}
     >

@@ -27,6 +27,7 @@ func (s *Server) Router() *gin.Engine {
 		})
 	})
 	api.GET("/config", s.needsBootstrap)
+	api.GET("/frontend-config", s.frontendConfig)
 	api.GET("/users/needs-bootstrap", s.needsBootstrap)
 	api.POST("/users/bootstrap", s.bootstrap)
 	api.POST("/auth/login", s.login)
@@ -67,6 +68,7 @@ func (s *Server) Router() *gin.Engine {
 		admin.DELETE("/admin/votes/:id", s.deleteVoteAdmin)
 		admin.DELETE("/admin/votes", s.bulkDeleteVotesAdmin)
 
+		admin.PATCH("/admin/frontend-config", s.updateFrontendConfig)
 		admin.POST("/admin/rank/modes", s.createVoteMode)
 		admin.PATCH("/admin/rank/modes/:id", s.updateVoteMode)
 		admin.DELETE("/admin/rank/modes/:id", s.deleteVoteMode)

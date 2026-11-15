@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -147,6 +148,10 @@ func (s *Server) uploadImage(c *gin.Context) {
 		serverError(c, err)
 		return
 	}
+	// Warm the sizes the UI asks for most. This turns the first gallery /
+	// ranking / landing view into a cache hit instead of a full decode +
+	// resize at request time.
+	go s.warmImageVariants(img)
 	c.JSON(http.StatusCreated, uploadResponse{Image: imageToDTO(img), ClaimToken: claimToken})
 }
 
@@ -188,6 +193,24 @@ func (s *Server) claimImages(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"claimed": claimed, "count": len(claimed)})
+}
+
+// warmImageVariants renders the common display sizes in the background.
+// Renderer writes are atomic, so concurrent requests for the same size are
+// safe and simply wait for / reuse the finished file.
+func (s *Server) warmImageVariants(img *store.Image) {
+	options := []imageproc.RenderOptions{
+		{Format: "webp", Width: 360, Quality: 78, SourceMime: img.MimeType},
+		{Format: "webp", Width: 640, Quality: 78, SourceMime: img.MimeType},
+		{Format: "webp", Height: 720, Quality: 82, SourceMime: img.MimeType},
+		{Format: "webp", Height: 1080, Quality: 85, SourceMime: img.MimeType},
+	}
+	for _, option := range options {
+		if _, _, err := s.Renderer.Render(img.StoragePath, img.ID, option); err != nil {
+			log.Printf("warm image %s: %v", img.ID, err)
+			return
+		}
+	}
 }
 
 func newClaimToken() (string, error) {
@@ -255,6 +278,7 @@ func (s *Server) serveImage(c *gin.Context) {
 		return
 	}
 
+	original := c.Query("original") == "true" || c.Query("original") == "1"
 	opts := imageproc.RenderOptions{SourceMime: img.MimeType}
 	if format := strings.ToLower(strings.TrimSpace(c.Query("format"))); format != "" {
 		switch format {
@@ -288,6 +312,49 @@ func (s *Server) serveImage(c *gin.Context) {
 			return
 		}
 		opts.Quality = q
+	}
+
+	if original {
+		// Original bytes are opt-in only (original=true), e.g. the explicit
+		// "Original" download in the library. Normal page requests default to
+		// a capped WebP so a 30 MP upload never crosses the wire unfiltered.
+		info, err := os.Stat(img.StoragePath)
+		if err != nil {
+			serverError(c, err)
+			return
+		}
+		etag := fmt.Sprintf(`"%s-original-%d"`, img.ID, info.Size())
+		if match := c.GetHeader("If-None-Match"); match == etag || strings.Contains(match, etag) {
+			c.Status(http.StatusNotModified)
+			return
+		}
+		data, err := os.ReadFile(img.StoragePath)
+		if err != nil {
+			serverError(c, err)
+			return
+		}
+		c.Header("ETag", etag)
+		c.Header("Cache-Control", "public, max-age=31536000, immutable")
+		if c.Query("download") == "true" {
+			name := img.Title
+			if name == "" {
+				name = img.ID
+			}
+			c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.%s"`, sanitizeFilename(name), extForFormat(strings.TrimPrefix(strings.ToLower(img.MimeType), "image/"))))
+		}
+		c.Data(http.StatusOK, img.MimeType, data)
+		return
+	}
+
+	// Default display request: cap large originals to a 1920px long edge /
+	// 1080p tall frame. Smaller uploads keep their native size (the WebP fast
+	// path avoids re-encoding them).
+	if opts.Width == 0 && opts.Height == 0 {
+		if img.Width > 1920 {
+			opts.Width = 1920
+		} else if img.Height > 1080 {
+			opts.Height = 1080
+		}
 	}
 
 	etag := fmt.Sprintf(`"%s-%s-%d-%d-%d-%d"`, img.ID, normalFormat(opts.Format), opts.Width, opts.Height, opts.Quality, img.SizeBytes)

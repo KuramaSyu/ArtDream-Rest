@@ -8,6 +8,7 @@ import {
   CircularProgress,
   Divider,
   IconButton,
+  LinearProgress,
   TextField,
   Tooltip,
   Typography,
@@ -21,7 +22,6 @@ import {
   DeleteOutlineRounded,
   ImageSearchRounded,
   LinkRounded,
-  SwapHorizRounded,
 } from "@mui/icons-material";
 import { AnimatePresence, motion } from "framer-motion";
 import { Navigate, useNavigate } from "react-router-dom";
@@ -42,13 +42,66 @@ import {
 import { relativeTime } from "../utils/format";
 
 const MAX_BYTES = 30 * 1024 * 1024;
-const ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp", "image/tiff"];
+const MAX_FILES = 12;
+const MAX_TOTAL_BYTES = 200 * 1024 * 1024;
+const UPLOAD_CONCURRENCY = 3;
+const ACCEPTED_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "image/bmp",
+  "image/tiff",
+];
 
 interface Preview {
+  key: string;
   file: File;
   url: string;
   width: number;
   height: number;
+  title: string;
+}
+
+interface UploadedItem {
+  id: string;
+  url: string;
+  title: string;
+  author: string;
+  anonymous: boolean;
+  localUrl?: string;
+}
+
+interface UploadProgress {
+  done: number;
+  total: number;
+}
+
+function newPreviewKey(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function readImageFile(file: File): Promise<{ url: string; width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      if (image.naturalWidth <= image.naturalHeight) {
+        URL.revokeObjectURL(url);
+        reject(new Error("landscape"));
+        return;
+      }
+      resolve({ url, width: image.naturalWidth, height: image.naturalHeight });
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("unreadable"));
+    };
+    image.src = url;
+  });
 }
 
 export function SubmitPage() {
@@ -58,24 +111,34 @@ export function SubmitPage() {
   const theme = useTheme();
   const fileInput = useRef<HTMLInputElement | null>(null);
 
-  const [preview, setPreview] = useState<Preview | null>(null);
+  const [previews, setPreviews] = useState<Preview[]>([]);
   const [author, setAuthor] = useState("");
   const [authorTouched, setAuthorTouched] = useState(false);
-  const [title, setTitle] = useState("");
   const [dragging, setDragging] = useState(false);
+  const [adding, setAdding] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState<UploadProgress>({ done: 0, total: 0 });
   const [error, setError] = useState("");
-  const [uploaded, setUploaded] = useState<{ url: string; title: string; author: string; anonymous: boolean } | null>(null);
+  const [uploaded, setUploaded] = useState<UploadedItem[]>([]);
   const [pending, setPending] = useState<PendingSubmission[]>(() => loadPendingSubmissions());
   const [showClaims, setShowClaims] = useState(false);
 
+  const previewsRef = useRef<Preview[]>(previews);
+  useEffect(() => {
+    previewsRef.current = previews;
+  }, [previews]);
+
+  const uploadedRef = useRef<UploadedItem[]>(uploaded);
+  useEffect(() => {
+    uploadedRef.current = uploaded;
+  }, [uploaded]);
+
   const stageUrls = useMemo(() => {
-    const urls: string[] = [];
-    if (preview) urls.push(preview.url);
-    if (uploaded) urls.push(uploaded.url);
+    const urls: string[] = previews.map((preview) => preview.url);
+    urls.push(...uploaded.slice(0, 6).map((item) => item.localUrl ?? item.url));
     urls.push(...pending.slice(0, 4).map((item) => item.url));
     return urls;
-  }, [pending, preview, uploaded]);
+  }, [pending, previews, uploaded]);
   useStageImages(stageUrls);
 
   useEffect(() => {
@@ -94,77 +157,228 @@ export function SubmitPage() {
     };
   }, []);
 
+  // Revoke object URLs when previews leave the page; individual removals revoke
+  // explicitly, so this effect only handles unmount.
   useEffect(() => {
     return () => {
-      if (preview) URL.revokeObjectURL(preview.url);
+      previewsRef.current.forEach((preview) => URL.revokeObjectURL(preview.url));
+      uploadedRef.current.forEach((item) => {
+        if (item.localUrl) URL.revokeObjectURL(item.localUrl);
+      });
     };
-  }, [preview]);
+  }, []);
 
-  const validateAndSetFile = useCallback(
-    (file: File) => {
-      setError("");
-      if (!ACCEPTED_TYPES.includes(file.type)) {
-        setError("Use a JPEG, PNG, WebP, GIF, BMP or TIFF image.");
+  const clearUploaded = useCallback(() => {
+    setUploaded((previous) => {
+      previous.forEach((item) => {
+        if (item.localUrl) URL.revokeObjectURL(item.localUrl);
+      });
+      return [];
+    });
+  }, []);
+
+  const updateTitle = (key: string, title: string) => {
+    setPreviews((previous) =>
+      previous.map((preview) => (preview.key === key ? { ...preview, title } : preview)),
+    );
+  };
+
+  const removePreview = (key: string) => {
+    setPreviews((previous) => {
+      const target = previous.find((preview) => preview.key === key);
+      if (target) URL.revokeObjectURL(target.url);
+      return previous.filter((preview) => preview.key !== key);
+    });
+  };
+
+  const addFiles = useCallback(
+    async (fileList: FileList | File[]) => {
+      if (adding || uploading) return;
+      const files = Array.from(fileList);
+      if (files.length === 0) return;
+
+      const current = previewsRef.current;
+      const slots = Math.max(0, MAX_FILES - current.length);
+      if (slots === 0) {
+        notify(`You can upload up to ${MAX_FILES} images at once.`, "warning");
         return;
       }
-      if (file.size > MAX_BYTES) {
-        setError("That image is larger than 30 MiB.");
-        return;
-      }
-      const url = URL.createObjectURL(file);
-      const image = new Image();
-      image.onload = () => {
-        if (image.naturalWidth <= image.naturalHeight) {
-          setError("Landscape only for now — the width has to be greater than the height.");
-          URL.revokeObjectURL(url);
-          return;
+
+      const existing = new Set(
+        current.map((preview) => `${preview.file.name}|${preview.file.size}|${preview.file.lastModified}`),
+      );
+      let totalBytes = current.reduce((sum, preview) => sum + preview.file.size, 0);
+      const accepted: File[] = [];
+      let rejectedType = 0;
+      let rejectedSize = 0;
+      let duplicate = 0;
+
+      for (const file of files) {
+        if (accepted.length >= slots) {
+          notify(`Only ${slots} more image${slots === 1 ? "" : "s"} fit in this batch.`, "info");
+          break;
         }
-        setPreview((previous) => {
-          if (previous) URL.revokeObjectURL(previous.url);
-          return { file, url, width: image.naturalWidth, height: image.naturalHeight };
-        });
-        setUploaded(null);
-      };
-      image.onerror = () => {
-        URL.revokeObjectURL(url);
-        setError("That image could not be read. Try a different file.");
-      };
-      image.src = url;
+        const fingerprint = `${file.name}|${file.size}|${file.lastModified}`;
+        if (existing.has(fingerprint)) {
+          duplicate += 1;
+          continue;
+        }
+        if (!ACCEPTED_TYPES.includes(file.type)) {
+          rejectedType += 1;
+          continue;
+        }
+        if (file.size > MAX_BYTES) {
+          rejectedSize += 1;
+          continue;
+        }
+        if (totalBytes + file.size > MAX_TOTAL_BYTES) {
+          rejectedSize += 1;
+          continue;
+        }
+        existing.add(fingerprint);
+        totalBytes += file.size;
+        accepted.push(file);
+      }
+
+      if (accepted.length === 0) {
+        const reason =
+          rejectedType > 0
+            ? "Use JPEG, PNG, WebP, GIF, BMP or TIFF images."
+            : rejectedSize > 0
+              ? "Each image must be under 30 MiB, and the batch under 200 MiB."
+              : duplicate > 0
+                ? "Those files are already in the batch."
+                : "";
+        if (reason) setError(reason);
+        return;
+      }
+
+      setAdding(true);
+      setError("");
+      const additions: Preview[] = [];
+      let portrait = 0;
+      for (const file of accepted) {
+        try {
+          const meta = await readImageFile(file);
+          additions.push({
+            key: newPreviewKey(),
+            file,
+            url: meta.url,
+            width: meta.width,
+            height: meta.height,
+            title: "",
+          });
+        } catch (readError) {
+          if (readError instanceof Error && readError.message === "landscape") {
+            portrait += 1;
+          } else {
+            rejectedType += 1;
+          }
+        }
+      }
+
+      if (additions.length > 0) {
+        clearUploaded();
+        setPreviews((previous) => [...previous, ...additions]);
+      }
+      setAdding(false);
+
+      const problems: string[] = [];
+      if (portrait > 0) {
+        problems.push(
+          `${portrait} portrait image${portrait === 1 ? " was" : "s were"} skipped — landscape only.`,
+        );
+      }
+      if (rejectedType > 0) problems.push(`${rejectedType} file(s) were not supported images.`);
+      if (rejectedSize > 0) problems.push(`${rejectedSize} file(s) were too large.`);
+      if (duplicate > 0) problems.push(`${duplicate} duplicate(s) ignored.`);
+      if (problems.length > 0) {
+        const message = problems.join(" ");
+        setError(message);
+        notify(message, additions.length > 0 ? "info" : "warning");
+      }
     },
-    [],
+    [adding, clearUploaded, notify, uploading],
   );
 
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setDragging(false);
-    const file = event.dataTransfer.files?.[0];
-    if (file) validateAndSetFile(file);
+    void addFiles(event.dataTransfer.files);
   };
 
   const submit = async () => {
-    if (uploading) return;
-    if (!preview) {
-      setError("Pick a landscape image first.");
+    if (uploading || adding) return;
+    if (previews.length === 0) {
+      setError("Pick at least one landscape image first.");
       return;
     }
     if (!author.trim()) {
       setError("Tell us the artist name to show.");
       return;
     }
+
     setError("");
     setUploading(true);
-    try {
-      const form = new FormData();
-      form.append("image", preview.file);
-      form.append("author", author.trim());
-      if (title.trim()) form.append("title", title.trim());
-      const response = await api.uploadImage(form);
-      // A claim token is issued for every anonymous upload and also when a
-      // stale token silently degrades to an anonymous upload. Remember it so
-      // the submission can be attached later.
+    clearUploaded();
+    const batch = [...previews];
+    const results: Array<{
+      preview: Preview;
+      response?: Awaited<ReturnType<typeof api.uploadImage>>;
+      error?: string;
+    }> = [];
+    let cursor = 0;
+    let completed = 0;
+    setProgress({ done: 0, total: batch.length });
+
+    const worker = async () => {
+      while (true) {
+        const index = cursor;
+        cursor += 1;
+        if (index >= batch.length) return;
+        const preview = batch[index]!;
+        try {
+          const form = new FormData();
+          form.append("image", preview.file);
+          form.append("author", author.trim());
+          if (preview.title.trim()) form.append("title", preview.title.trim());
+          const response = await api.uploadImage(form);
+          results.push({ preview, response });
+        } catch (uploadError) {
+          results.push({
+            preview,
+            error:
+              uploadError instanceof ApiError
+                ? uploadError.message
+                : "The image could not be uploaded.",
+          });
+        } finally {
+          completed += 1;
+          setProgress({ done: completed, total: batch.length });
+        }
+      }
+    };
+
+    await Promise.all(
+      Array.from({ length: Math.min(UPLOAD_CONCURRENCY, batch.length) }, () => worker()),
+    );
+
+    let pendingList = loadPendingSubmissions();
+    const successes: UploadedItem[] = [];
+    const successfulKeys = new Set<string>();
+    let failures = 0;
+    let anonymousCount = 0;
+
+    for (const result of results) {
+      if (!result.response) {
+        failures += 1;
+        continue;
+      }
+      const response = result.response;
       const anonymous = Boolean(response.claimToken);
+      if (anonymous) anonymousCount += 1;
       if (response.claimToken) {
-        const next = addPendingSubmission({
+        pendingList = addPendingSubmission({
           id: response.image.id,
           claimToken: response.claimToken,
           author: response.image.author,
@@ -174,45 +388,70 @@ export function SubmitPage() {
           height: response.image.height,
           createdAt: response.image.createdAt,
         });
-        setPending(next);
-        emitPendingChange();
       }
-      setUploaded({
+      successes.push({
+        id: response.image.id,
         url: response.image.url,
-        title: response.image.title || "Untitled dream",
+        title: response.image.title,
         author: response.image.author,
         anonymous,
+        localUrl: result.preview.url,
       });
-      if (preview) URL.revokeObjectURL(preview.url);
-      setPreview(null);
-      setTitle("");
+      successfulKeys.add(result.preview.key);
+    }
+
+    if (successes.length > 0) {
+      // Successful preview object URLs are transferred to the success cards,
+      // so they are revoked when the success panel is dismissed, not here.
+      setPreviews((previous) =>
+        previous.filter((preview) => !successfulKeys.has(preview.key)),
+      );
+      setUploaded(successes);
+      const linked = successes.length - anonymousCount;
+      notify(
+        [
+          `${successes.length} image${successes.length === 1 ? "" : "s"} uploaded`,
+          linked > 0 ? `${linked} linked to your account` : "",
+          anonymousCount > 0 ? `${anonymousCount} saved on this device` : "",
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        "success",
+      );
+    }
+    if (failures > 0) {
+      notify(
+        `${failures} image${failures === 1 ? "" : "s"} could not be uploaded. The previews remain so you can retry.`,
+        "error",
+      );
+    }
+
+    setPending(pendingList);
+    emitPendingChange();
+    if (successes.length > 0) {
       setAuthorTouched(false);
       if (user) setAuthor(user.displayName || user.username);
-      else setAuthor("");
-      notify(anonymous ? "Saved on this device — create an account to keep it." : "Submission received.", "success");
-    } catch (uploadError) {
-      const message =
-        uploadError instanceof ApiError ? uploadError.message : "The image could not be uploaded.";
-      setError(message);
-      notify(message, "error");
-    } finally {
-      setUploading(false);
     }
+    setUploading(false);
+    setProgress({ done: 0, total: 0 });
   };
 
   if (status === "ready" && needsBootstrap) {
     return <Navigate to="/" replace />;
   }
 
+  const anonymousSuccesses = uploaded.filter((item) => item.anonymous).length;
+  const linkedSuccesses = uploaded.length - anonymousSuccesses;
+
   return (
     <PageShell maxWidth="lg">
       <PageHeader
         eyebrow="submit"
-        title="Send a dream into the ring."
+        title="Send dreams into the ring."
         description={
           <>
-            Landscape images only for now. Pick the artist name freely — it does not have to
-            match your account.
+            Landscape images only for now. Pick one artist name for the batch; every image can
+            still carry its own optional title.
           </>
         }
         action={
@@ -253,81 +492,31 @@ export function SubmitPage() {
             }}
             onDragLeave={() => setDragging(false)}
             onDrop={handleDrop}
-            onClick={() => {
-              if (!preview) fileInput.current?.click();
-            }}
+            onClick={() => fileInput.current?.click()}
             sx={{
               position: "relative",
               overflow: "hidden",
-              minHeight: { xs: 260, md: 380 },
+              minHeight: previews.length > 0 ? 118 : { xs: 260, md: 360 },
               display: "grid",
               placeItems: "center",
-              cursor: preview ? "default" : "pointer",
-              background: preview ? "rgba(0,0,0,.3)" : "rgba(255,255,255,.035)",
+              cursor: adding ? "progress" : "pointer",
+              background: previews.length > 0 ? "rgba(255,255,255,.03)" : "rgba(255,255,255,.035)",
+              transition: "min-height 260ms ease",
             }}
           >
             <input
               ref={fileInput}
               type="file"
               accept={ACCEPTED_TYPES.join(",")}
+              multiple
               hidden
               onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) validateAndSetFile(file);
+                if (event.target.files) void addFiles(event.target.files);
                 event.target.value = "";
               }}
             />
             <AnimatePresence mode="wait">
-              {preview ? (
-                <motion.div
-                  key={preview.url}
-                  initial={{ opacity: 0, scale: 1.02 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.45 }}
-                  style={{ position: "absolute", inset: 0 }}
-                >
-                  <img
-                    src={preview.url}
-                    alt="Your submission preview"
-                    style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                  />
-                  <Box
-                    sx={{
-                      position: "absolute",
-                      inset: 0,
-                      background: "linear-gradient(180deg, transparent 55%, rgba(0,0,0,.55))",
-                    }}
-                  />
-                  <Box
-                    sx={{
-                      position: "absolute",
-                      left: 16,
-                      bottom: 16,
-                      display: "flex",
-                      gap: 1,
-                      flexWrap: "wrap",
-                    }}
-                  >
-                    <Chip
-                      size="small"
-                      label={`${preview.width} × ${preview.height} · landscape ✓`}
-                      color="success"
-                      variant="outlined"
-                      sx={{ background: "rgba(0,0,0,.4)" }}
-                    />
-                    <Button
-                      size="small"
-                      variant="contained"
-                      startIcon={<SwapHorizRounded />}
-                      onClick={() => fileInput.current?.click()}
-                      sx={{ borderRadius: 99, textTransform: "none" }}
-                    >
-                      Change
-                    </Button>
-                  </Box>
-                </motion.div>
-              ) : (
+              {previews.length === 0 ? (
                 <motion.div
                   key="empty"
                   initial={{ opacity: 0, y: 10 }}
@@ -348,21 +537,44 @@ export function SubmitPage() {
                       animation: "bob 5s ease-in-out infinite",
                     }}
                   >
-                    <AddPhotoAlternateRounded sx={{ fontSize: 38 }} />
+                    {adding ? <CircularProgress size={34} /> : <AddPhotoAlternateRounded sx={{ fontSize: 38 }} />}
                   </Box>
                   <Typography className="display" sx={{ fontSize: "1.7rem", fontWeight: 620 }}>
-                    Drop a landscape image
+                    Drop landscape images
                   </Typography>
                   <Typography variant="body2" color="text.secondary" sx={{ mt: 0.8 }}>
-                    or click to browse · JPEG, PNG, WebP · max 30 MiB
+                    or click to browse · up to {MAX_FILES} at once · JPEG, PNG, WebP · max 30 MiB each
+                  </Typography>
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="more"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  style={{ display: "grid", placeItems: "center", gap: 8, padding: 20, textAlign: "center" }}
+                >
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap", justifyContent: "center" }}>
+                    {adding ? <CircularProgress size={18} /> : <AddPhotoAlternateRounded />}
+                    <Typography sx={{ fontWeight: 650 }}>
+                      {adding ? "Reading images…" : "Add more images"}
+                    </Typography>
+                    <Chip
+                      size="small"
+                      label={`${previews.length}/${MAX_FILES}`}
+                      sx={{ background: "rgba(255,255,255,.08)" }}
+                    />
+                  </Box>
+                  <Typography variant="body2" color="text.secondary">
+                    Drop more files here, or click to browse.
                   </Typography>
                 </motion.div>
               )}
             </AnimatePresence>
           </Box>
 
-          <AnimatePresence mode="wait">
-            {uploaded && (
+          <AnimatePresence>
+            {uploaded.length > 0 && (
               <motion.div
                 key="uploaded"
                 initial={{ opacity: 0, y: 16, scale: 0.98 }}
@@ -371,64 +583,199 @@ export function SubmitPage() {
                 transition={{ type: "spring", stiffness: 220, damping: 24 }}
                 style={{ marginTop: 20 }}
               >
-                <Box
-                  className="glass"
-                  sx={{
-                    borderRadius: 5,
-                    p: 2.2,
-                    display: "flex",
-                    gap: 2,
-                    alignItems: "center",
-                    flexWrap: "wrap",
-                  }}
-                >
+                <Box className="glass" sx={{ borderRadius: 5, p: 2.2 }}>
                   <Box
-                    component="img"
-                    src={imageVariant(uploaded.url, { w: 360 })}
-                    alt={uploaded.title}
-                    sx={{ width: 104, height: 74, borderRadius: 2.5, objectFit: "cover" }}
-                  />
-                  <Box sx={{ flex: 1, minWidth: 180 }}>
-                    <Box sx={{ display: "flex", alignItems: "center", gap: 0.8 }}>
-                      <CheckCircleRounded fontSize="small" color="success" />
-                      <Typography sx={{ fontWeight: 700 }}>
-                        {uploaded.anonymous ? "Saved on this device" : "Submission received"}
-                      </Typography>
+                    sx={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 1.2,
+                      flexWrap: "wrap",
+                      justifyContent: "space-between",
+                    }}
+                  >
+                    <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                      <CheckCircleRounded color="success" />
+                      <Box>
+                        <Typography sx={{ fontWeight: 700 }}>
+                          {uploaded.length} submission{uploaded.length === 1 ? "" : "s"} received
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          {linkedSuccesses > 0 ? `${linkedSuccesses} linked to your account` : ""}
+                          {linkedSuccesses > 0 && anonymousSuccesses > 0 ? " · " : ""}
+                          {anonymousSuccesses > 0
+                            ? `${anonymousSuccesses} saved on this device`
+                            : ""}
+                        </Typography>
+                      </Box>
                     </Box>
-                    <Typography variant="body2" color="text.secondary">
-                      {uploaded.title} · by {uploaded.author}
+                    <Box sx={{ display: "flex", gap: 1 }}>
+                      <Button
+                        size="small"
+                        variant="contained"
+                        onClick={() => navigate("/rank")}
+                        endIcon={<AutoAwesomeRounded />}
+                        sx={{ borderRadius: 99, textTransform: "none" }}
+                      >
+                        Rank
+                      </Button>
+                      <Button
+                        size="small"
+                        onClick={() => {
+                          clearUploaded();
+                          fileInput.current?.click();
+                        }}
+                        sx={{ textTransform: "none" }}
+                      >
+                        Submit more
+                      </Button>
+                    </Box>
+                  </Box>
+                  <Box
+                    sx={{
+                      mt: 1.8,
+                      display: "grid",
+                      gridTemplateColumns: {
+                        xs: "repeat(2, minmax(0, 1fr))",
+                        sm: "repeat(3, minmax(0, 1fr))",
+                        md: "repeat(4, minmax(0, 1fr))",
+                      },
+                      gap: 1.2,
+                    }}
+                  >
+                    {uploaded.map((item) => (
+                      <Box key={item.id} sx={{ minWidth: 0 }}>
+                        <Box
+                          component="img"
+                          src={
+                            item.localUrl ??
+                            imageVariant(item.url, { w: 360, quality: 78 })
+                          }
+                          alt={item.title || `By ${item.author}`}
+                          sx={{
+                            width: "100%",
+                            aspectRatio: "4 / 3",
+                            objectFit: "cover",
+                            borderRadius: 2,
+                          }}
+                        />
+                        {item.title ? (
+                          <>
+                            <Typography noWrap variant="body2" sx={{ fontWeight: 650, mt: 0.4 }}>
+                              {item.title}
+                            </Typography>
+                            <Typography noWrap variant="caption" color="text.secondary">
+                              {item.author}
+                            </Typography>
+                          </>
+                        ) : (
+                          <Typography noWrap variant="body2" sx={{ fontWeight: 650, mt: 0.4 }}>
+                            {item.author}
+                          </Typography>
+                        )}
+                      </Box>
+                    ))}
+                  </Box>
+                  {anonymousSuccesses > 0 && (
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1.2, opacity: 0.8 }}>
+                      Create an account to link anonymous submissions later — the artist names
+                      stay exactly as submitted.
                     </Typography>
-                    {uploaded.anonymous && (
-                      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.3, opacity: 0.8 }}>
-                        Create an account to link it later — your artist name stays the same.
-                      </Typography>
-                    )}
-                  </Box>
-                  <Box sx={{ display: "flex", gap: 1 }}>
-                    <Button
-                      size="small"
-                      variant="contained"
-                      onClick={() => navigate("/rank")}
-                      endIcon={<AutoAwesomeRounded />}
-                      sx={{ borderRadius: 99, textTransform: "none" }}
-                    >
-                      Rank
-                    </Button>
-                    <Button
-                      size="small"
-                      onClick={() => {
-                        setUploaded(null);
-                        fileInput.current?.click();
-                      }}
-                      sx={{ textTransform: "none" }}
-                    >
-                      Another
-                    </Button>
-                  </Box>
+                  )}
                 </Box>
               </motion.div>
             )}
           </AnimatePresence>
+
+          {previews.length > 0 && (
+            <Box
+              sx={{
+                mt: 2,
+                display: "grid",
+                gridTemplateColumns: {
+                  xs: "1fr",
+                  sm: "repeat(2, minmax(0, 1fr))",
+                },
+                gap: 2,
+              }}
+            >
+              {previews.map((preview, index) => (
+                <motion.div
+                  key={preview.key}
+                  layout
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.97 }}
+                >
+                  <Box className="glass" sx={{ borderRadius: 4, overflow: "hidden" }}>
+                    <Box sx={{ position: "relative", aspectRatio: "4 / 3", bgcolor: "rgba(0,0,0,.25)" }}>
+                      <Box
+                        component="img"
+                        src={preview.url}
+                        alt={`Preview ${index + 1}`}
+                        sx={{ width: "100%", height: "100%", objectFit: "cover" }}
+                      />
+                      <Chip
+                        size="small"
+                        label={index + 1}
+                        sx={{
+                          position: "absolute",
+                          top: 8,
+                          left: 8,
+                          background: "rgba(10,9,15,.72)",
+                          color: "#fff",
+                          height: 22,
+                          minWidth: 26,
+                          fontSize: "0.7rem",
+                        }}
+                      />
+                      <Tooltip title="Remove from batch">
+                        <IconButton
+                          size="small"
+                          aria-label={`Remove image ${index + 1}`}
+                          onClick={() => removePreview(preview.key)}
+                          disabled={uploading}
+                          sx={{
+                            position: "absolute",
+                            top: 6,
+                            right: 6,
+                            color: "#fff",
+                            background: "rgba(10,9,15,.66)",
+                            "&:hover": { background: "rgba(10,9,15,.9)" },
+                          }}
+                        >
+                          <DeleteOutlineRounded fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                      <Chip
+                        size="small"
+                        label={`${preview.width} × ${preview.height} · landscape ✓`}
+                        sx={{
+                          position: "absolute",
+                          left: 8,
+                          bottom: 8,
+                          background: "rgba(10,9,15,.66)",
+                          color: "rgba(255,255,255,.82)",
+                          height: 22,
+                          fontSize: "0.66rem",
+                        }}
+                      />
+                    </Box>
+                    <Box sx={{ p: 1.4 }}>
+                      <TextField
+                        label="Title (optional)"
+                        size="small"
+                        fullWidth
+                        value={preview.title}
+                        onChange={(event) => updateTitle(preview.key, event.target.value)}
+                        inputProps={{ maxLength: 200 }}
+                        disabled={uploading}
+                      />
+                    </Box>
+                  </Box>
+                </motion.div>
+              ))}
+            </Box>
+          )}
         </Box>
 
         <Box className="glass" sx={{ borderRadius: 5, p: { xs: 2.4, sm: 3 } }}>
@@ -436,7 +783,8 @@ export function SubmitPage() {
             The little card
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2.4 }}>
-            Only the artist name is required. Title can stay empty.
+            One artist name for every image in this batch. Titles are optional and can be set on
+            the previews.
           </Typography>
 
           <Box
@@ -459,45 +807,59 @@ export function SubmitPage() {
               helperText={
                 user
                   ? `Prefilled from your account, but you can show any name. Account id ${user.id} is stored separately.`
-                  : "Shown publicly with the image. Saved locally until you create an account."
+                  : "Shown publicly with every image. Saved locally until you create an account."
               }
               inputProps={{ maxLength: 120 }}
+              disabled={uploading}
             />
-            <TextField
-              label="Title (optional)"
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              size="small"
-              inputProps={{ maxLength: 200 }}
-            />
+
+            {previews.length > 0 && (
+              <Typography variant="body2" color="text.secondary">
+                {previews.length} image{previews.length === 1 ? "" : "s"} ready
+                {previews.some((preview) => preview.title.trim()) ? " · titles set" : ""}.
+              </Typography>
+            )}
+
+            {uploading && progress.total > 0 && (
+              <Box>
+                <LinearProgress
+                  variant="determinate"
+                  value={(progress.done / progress.total) * 100}
+                  sx={{ borderRadius: 99, height: 6 }}
+                />
+                <Typography variant="caption" color="text.secondary" sx={{ mt: 0.6, display: "block" }}>
+                  Uploading {progress.done}/{progress.total}…
+                </Typography>
+              </Box>
+            )}
+
             {error && (
               <Alert severity="warning" sx={{ borderRadius: 3 }}>
                 {error}
               </Alert>
             )}
+
             <Button
               type="submit"
               variant="contained"
               size="large"
-              disabled={uploading || !preview}
+              disabled={uploading || adding || previews.length === 0}
               disableElevation
               startIcon={
-                uploading ? (
-                  <CircularProgress size={18} color="inherit" />
-                ) : (
-                  <ImageSearchRounded />
-                )
+                uploading ? <CircularProgress size={18} color="inherit" /> : <ImageSearchRounded />
               }
               sx={{
                 borderRadius: 99,
                 py: 1.1,
                 textTransform: "none",
                 fontWeight: 700,
-                background: `linear-gradient(120deg, ${theme.palette.primary.main}, ${theme.palette.secondary.main})`,
-                color: theme.palette.getContrastText(theme.palette.primary.main),
               }}
             >
-              {uploading ? "Sending…" : "Submit image"}
+              {uploading
+                ? `Uploading ${progress.done}/${progress.total}…`
+                : previews.length > 1
+                  ? `Submit ${previews.length} images`
+                  : "Submit image"}
             </Button>
           </Box>
 
@@ -507,8 +869,8 @@ export function SubmitPage() {
             <AutoAwesomeRounded sx={{ opacity: 0.6, mt: 0.2 }} />
             <Typography variant="body2" color="text.secondary" sx={{ opacity: 0.86 }}>
               {user
-                ? `This submission will be linked to your account id (${user.id}) — separate from the artist name.`
-                : "No account? No problem. The image is stored and this device remembers how to attach it later."}
+                ? `Submissions are linked to your account id (${user.id}) — separate from the artist name.`
+                : "No account? No problem. Images are stored and this device remembers how to attach them later."}
             </Typography>
           </Box>
         </Box>
@@ -567,14 +929,16 @@ export function SubmitPage() {
                 >
                   <Box
                     component="img"
-                    src={imageVariant(item.url, { w: 280 })}
+                    src={imageVariant(item.url, { w: 360, quality: 78 })}
                     alt={item.title || `By ${item.author}`}
                     sx={{ width: 92, height: 66, borderRadius: 2, objectFit: "cover", flexShrink: 0 }}
                   />
                   <Box sx={{ flex: 1, minWidth: 0 }}>
-                    <Typography noWrap sx={{ fontWeight: 700, fontSize: "0.95rem" }}>
-                      {item.title || "Untitled dream"}
-                    </Typography>
+                    {item.title && (
+                      <Typography noWrap sx={{ fontWeight: 700, fontSize: "0.95rem" }}>
+                        {item.title}
+                      </Typography>
+                    )}
                     <Typography noWrap variant="body2" color="text.secondary">
                       {item.author} · {relativeTime(item.createdAt)}
                     </Typography>

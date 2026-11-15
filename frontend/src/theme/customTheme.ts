@@ -256,18 +256,19 @@ export class CustomThemeImpl implements CustomTheme {
       return darken(color, numCoef);
     };
 
+    // ArtDream uses MUI's standard linear spacing scale (0.25rem per
+    // factor). The reference implementation's exponential scale turns
+    // values like `pb: 10` into thousands of pixels, which breaks page
+    // layouts that use ordinary spacing tokens.
     this.spacing = (...args: Array<number | string>): string => {
       return args
         .map((factor) => {
           const numFactor =
             typeof factor === "string" ? parseFloat(factor) : factor;
-          // The scale below is exponential (0.25 * 2^n rem), which would
-          // turn `0` into 0.25rem and leave a 4px band wherever a zero
-          // spacing is asked for. Keep zero at zero.
           if (!Number.isFinite(numFactor) || numFactor === 0) {
             return "0rem";
           }
-          return `${0.25 * Math.pow(2, numFactor)}rem`;
+          return `${0.25 * numFactor}rem`;
         })
         .join(" ");
     };
@@ -446,6 +447,16 @@ export class CustomThemeImpl implements CustomTheme {
 
     // Compute once, then merge into component overrides below.
     const tooltipBbackground = this.elevate(this.palette.background.paper, 24);
+
+    // ArtDream deliberately keeps action buttons neutral: artwork supplies the
+    // colour, not the UI chrome. Semantic destructive buttons remain red.
+    const dark = this.palette.mode === "dark";
+    const neutralButtonBg = dark ? "rgba(247,242,235,0.95)" : "rgba(20,17,26,0.94)";
+    const neutralButtonHover = dark ? "rgba(247,242,235,0.82)" : "rgba(20,17,26,0.82)";
+    const neutralButtonText = dark ? "#17131f" : "#faf6f1";
+    const neutralBorder = dark ? "rgba(247,242,235,0.38)" : "rgba(20,17,26,0.32)";
+    const neutralHoverBg = dark ? "rgba(247,242,235,0.1)" : "rgba(20,17,26,0.08)";
+
     this.components = {
       ...this.components, // Spread existing component overrides
       MuiTooltip: {
@@ -465,6 +476,40 @@ export class CustomThemeImpl implements CustomTheme {
       MuiButton: {
         styleOverrides: {
           ...RootColorAndRadius,
+          containedPrimary: {
+            backgroundColor: neutralButtonBg,
+            color: neutralButtonText,
+            "&:hover": { backgroundColor: neutralButtonHover },
+          },
+          containedSecondary: {
+            backgroundColor: neutralButtonBg,
+            color: neutralButtonText,
+            "&:hover": { backgroundColor: neutralButtonHover },
+          },
+          outlinedPrimary: {
+            color: this.palette.text.primary,
+            borderColor: neutralBorder,
+            "&:hover": {
+              borderColor: this.palette.text.primary,
+              backgroundColor: neutralHoverBg,
+            },
+          },
+          outlinedSecondary: {
+            color: this.palette.text.primary,
+            borderColor: neutralBorder,
+            "&:hover": {
+              borderColor: this.palette.text.primary,
+              backgroundColor: neutralHoverBg,
+            },
+          },
+          textPrimary: {
+            color: this.palette.text.primary,
+            "&:hover": { backgroundColor: neutralHoverBg },
+          },
+          textSecondary: {
+            color: this.palette.text.secondary,
+            "&:hover": { backgroundColor: neutralHoverBg },
+          },
         },
       },
       MuiButtonGroup: {

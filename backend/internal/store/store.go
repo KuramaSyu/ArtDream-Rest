@@ -80,6 +80,12 @@ CREATE TABLE IF NOT EXISTS images (
 CREATE INDEX IF NOT EXISTS images_author_idx ON images(author COLLATE NOCASE);
 CREATE INDEX IF NOT EXISTS images_created_idx ON images(created_at);
 
+CREATE TABLE IF NOT EXISTS app_config (
+	key        TEXT PRIMARY KEY,
+	value      TEXT NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS vote_modes (
 	id          INTEGER PRIMARY KEY AUTOINCREMENT,
 	name        TEXT NOT NULL COLLATE NOCASE UNIQUE,
@@ -124,6 +130,13 @@ CREATE INDEX IF NOT EXISTS votes_mode_idx ON votes(mode_id);
 	}
 
 	now := time.Now().Unix()
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO app_config (key, value, updated_at) VALUES ('ranking_anonymized', 'false', ?)`,
+		now,
+	); err != nil {
+		return fmt.Errorf("seed frontend config: %w", err)
+	}
+
 	modes := []struct {
 		name, description string
 		min, max          int

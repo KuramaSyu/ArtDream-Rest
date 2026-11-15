@@ -1,6 +1,7 @@
 import { getToken, notifyUnauthorized } from "./session";
 import type {
   AdminFilter,
+  FrontendConfig,
   ImageItem,
   ListResponse,
   RankQuery,
@@ -121,6 +122,8 @@ export const api = {
     displayName?: string;
   }) => request<SessionResponse>("/users/bootstrap", { method: "POST", body }),
 
+  frontendConfig: () => request<FrontendConfig>("/frontend-config"),
+
   register: (body: {
     username: string;
     password: string;
@@ -221,6 +224,9 @@ export const api = {
 
     listUsers: () => request<ListResponse<User>>("/users"),
 
+    updateFrontendConfig: (body: Partial<Pick<FrontendConfig, "rankingAnonymized">>) =>
+      request<FrontendConfig>("/admin/frontend-config", { method: "PATCH", body }),
+
     createUser: (body: {
       username: string;
       password: string;
@@ -266,15 +272,28 @@ export function resolveImageUrl(url: string | undefined | null): string {
 /** Build an image URL with render overrides (format, width, height). */
 export function imageVariant(
   url: string,
-  options: { format?: "webp" | "png" | "jpg"; w?: number; h?: number; quality?: number } = {},
+  options: {
+    format?: "webp" | "png" | "jpg";
+    w?: number;
+    h?: number;
+    quality?: number;
+    /** Explicit opt-in to the pristine upload (used only by "Original"). */
+    original?: boolean;
+    download?: boolean;
+  } = {},
 ): string {
   const base = resolveImageUrl(url);
   if (!base) return base;
   const params = new URLSearchParams();
-  if (options.format) params.set("format", options.format);
-  if (options.w) params.set("w", String(options.w));
-  if (options.h) params.set("h", String(options.h));
-  if (options.quality) params.set("quality", String(options.quality));
+  if (options.original) {
+    params.set("original", "true");
+  } else {
+    if (options.format) params.set("format", options.format);
+    if (options.w) params.set("w", String(options.w));
+    if (options.h) params.set("h", String(options.h));
+    if (options.quality) params.set("quality", String(options.quality));
+  }
+  if (options.download) params.set("download", "true");
   const qs = params.toString();
   if (!qs) return base;
   return `${base}${base.includes("?") ? "&" : "?"}${qs}`;

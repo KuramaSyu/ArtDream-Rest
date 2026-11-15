@@ -322,20 +322,20 @@ func encodeMetadata(m map[string]any) string {
 // --- ranking --------------------------------------------------------------
 
 type rankEntry struct {
-	Rank      int      `json:"rank"`
-	ID        string   `json:"id"`
-	URL       string   `json:"url"`
-	Author    string   `json:"author"`
-	Title     string   `json:"title"`
-	Width     int      `json:"width"`
-	Height    int      `json:"height"`
-	Wins      int      `json:"wins"`
-	Losses    int      `json:"losses"`
-	Ties      int      `json:"ties"`
-	Votes     int      `json:"votes"`
-	Score     float64  `json:"score"`
-	WinRate   float64  `json:"winRate"`
-	Image     imageDTO `json:"image"`
+	Rank    int      `json:"rank"`
+	ID      string   `json:"id"`
+	URL     string   `json:"url"`
+	Author  string   `json:"author"`
+	Title   string   `json:"title"`
+	Width   int      `json:"width"`
+	Height  int      `json:"height"`
+	Wins    int      `json:"wins"`
+	Losses  int      `json:"losses"`
+	Ties    int      `json:"ties"`
+	Votes   int      `json:"votes"`
+	Score   float64  `json:"score"`
+	WinRate float64  `json:"winRate"`
+	Image   imageDTO `json:"image"`
 }
 
 type rankResponse struct {

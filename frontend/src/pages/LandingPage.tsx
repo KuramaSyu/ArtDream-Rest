@@ -6,6 +6,8 @@ import {
   CircularProgress,
   IconButton,
   InputAdornment,
+  Menu,
+  MenuItem,
   TextField,
   Tooltip,
   Typography,
@@ -13,13 +15,14 @@ import {
 import {
   ArrowForwardRounded,
   CloudUploadOutlined,
+  HighQualityRounded,
   LoginRounded,
   Visibility,
   VisibilityOff,
 } from "@mui/icons-material";
 import { AnimatePresence, motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
-import { api, ApiError, resolveImageUrl } from "../api/client";
+import { api, ApiError, imageVariant } from "../api/client";
 import type { ImageItem, TimeRange } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { Logo } from "../components/Logo";
@@ -28,16 +31,42 @@ import { PeriodPicker } from "../components/PeriodPicker";
 import { useToast } from "../components/Feedback";
 import { useStageImages } from "../theme/ThemeHost";
 import { periodLabel } from "../utils/format";
+import { useFrontendConfig } from "../config/FrontendConfig";
+
+type HomeQuality = "720" | "1080" | "1440" | "original";
+const HOME_QUALITY_KEY = "artdream.homeQuality";
+const HOME_QUALITIES: Array<{ value: HomeQuality; label: string }> = [
+  { value: "720", label: "720p · light" },
+  { value: "1080", label: "1080p · default" },
+  { value: "1440", label: "1440p · sharper" },
+  { value: "original", label: "Original · largest" },
+];
+
+function readHomeQuality(): HomeQuality {
+  try {
+    const stored = localStorage.getItem(HOME_QUALITY_KEY);
+    if (stored === "720" || stored === "1080" || stored === "1440" || stored === "original") {
+      return stored;
+    }
+  } catch {
+    // ignore storage restrictions
+  }
+  return "1080";
+}
 
 export function LandingPage() {
   const { user, needsBootstrap, status, bootstrap } = useAuth();
   const navigate = useNavigate();
   const { notify } = useToast();
+  const { config: frontendConfig, loading: frontendConfigLoading } = useFrontendConfig();
+  const rankingAnonymized = frontendConfig.rankingAnonymized;
   const [period, setPeriod] = useState<TimeRange>("day");
   const [slides, setSlides] = useState<ImageItem[]>([]);
   const [index, setIndex] = useState(0);
   const [loadingSlides, setLoadingSlides] = useState(true);
   const [reloadToken, setReloadToken] = useState(0);
+  const [quality, setQuality] = useState<HomeQuality>(readHomeQuality);
+  const [qualityMenu, setQualityMenu] = useState<HTMLElement | null>(null);
 
   const needsSetup = status === "ready" && needsBootstrap;
   const slideUrls = useMemo(() => slides.map((slide) => slide.url), [slides]);
@@ -77,6 +106,24 @@ export function LandingPage() {
   }, [slides.length]);
 
   const current = slides[index];
+  const currentAuthorHidden = frontendConfigLoading || rankingAnonymized;
+  const backgroundSrc = current
+    ? quality === "original"
+      ? imageVariant(current.url, { original: true })
+      : imageVariant(current.url, {
+          h: Number(quality),
+          quality: quality === "720" ? 82 : 85,
+        })
+    : "";
+  const chooseQuality = (next: HomeQuality) => {
+    setQuality(next);
+    setQualityMenu(null);
+    try {
+      localStorage.setItem(HOME_QUALITY_KEY, next);
+    } catch {
+      // ignore storage restrictions
+    }
+  };
 
   const start = () => {
     if (!user) {
@@ -102,10 +149,12 @@ export function LandingPage() {
               transition={{ duration: 1.5, ease: [0.22, 0.9, 0.24, 1] }}
             >
               <img
-                src={resolveImageUrl(current.url)}
+                src={backgroundSrc}
                 alt=""
                 className="ken-burns"
                 draggable={false}
+                decoding="async"
+                fetchPriority="high"
               />
             </motion.div>
           )}
@@ -212,10 +261,6 @@ export function LandingPage() {
                     fontSize: "1.02rem",
                     fontWeight: 750,
                     textTransform: "none",
-                    color: (theme) =>
-                      theme.palette.getContrastText(theme.palette.primary.main),
-                    background: (theme) =>
-                      `linear-gradient(135deg, ${theme.palette.primary.main}, ${theme.palette.secondary.main})`,
                     boxShadow: "0 22px 60px rgba(0,0,0,.45)",
                     "&:hover": {
                       transform: "translateY(-2px) scale(1.015)",
@@ -274,22 +319,24 @@ export function LandingPage() {
           sx={{
             position: "fixed",
             left: { xs: 16, md: 32 },
-            bottom: { xs: 20, md: 32 },
+            bottom: { xs: 88, md: 32 },
             zIndex: 20,
             display: "flex",
             alignItems: "center",
-            gap: 1.2,
-            maxWidth: "72vw",
-            px: 1.6,
-            py: 1,
+            gap: 1.4,
+            width: { xs: "calc(100vw - 32px)", sm: "auto" },
+            minWidth: { sm: 300 },
+            maxWidth: { xs: "calc(100vw - 32px)", sm: "min(560px, 62vw)" },
+            px: 1.8,
+            py: 1.1,
             borderRadius: 99,
-            background: "rgba(10,9,15,.36)",
-            backdropFilter: "blur(14px)",
-            border: "1px solid rgba(255,255,255,.1)",
+            background: "rgba(10,9,15,.62)",
+            border: "1px solid rgba(255,255,255,.12)",
           }}
         >
           <Box
             sx={{
+              flexShrink: 0,
               fontSize: "0.68rem",
               letterSpacing: "0.08em",
               textTransform: "uppercase",
@@ -300,22 +347,29 @@ export function LandingPage() {
           </Box>
           <Box
             sx={{
-              width: 1,
+              width: "1px",
+              flexShrink: 0,
               height: 16,
               background: "rgba(255,255,255,.18)",
             }}
           />
-          <Box sx={{ minWidth: 0 }}>
-            <Typography
-              noWrap
-              sx={{ fontSize: "0.86rem", fontWeight: 600, lineHeight: 1.25 }}
-            >
-              {current.title || "Untitled dream"}
-            </Typography>
-            <Typography noWrap sx={{ fontSize: "0.72rem", color: "rgba(255,255,255,.58)" }}>
-              by {current.author}
-            </Typography>
-          </Box>
+          {(current.title || (!currentAuthorHidden && current.author)) && (
+            <Box sx={{ minWidth: 0, flex: 1 }}>
+              {current.title && (
+                <Typography
+                  noWrap
+                  sx={{ fontSize: "0.94rem", fontWeight: 650, lineHeight: 1.25 }}
+                >
+                  {current.title}
+                </Typography>
+              )}
+              {!currentAuthorHidden && current.author && (
+                <Typography noWrap sx={{ fontSize: "0.78rem", color: "rgba(255,255,255,.62)" }}>
+                  by {current.author}
+                </Typography>
+              )}
+            </Box>
+          )}
           {!loadingSlides && slides.length === 0 && (
             <Button size="small" onClick={() => setReloadToken((n) => n + 1)}>
               retry
@@ -324,7 +378,57 @@ export function LandingPage() {
         </Box>
       )}
 
-      <PeriodPicker value={period} onChange={setPeriod} />
+      <PeriodPicker
+        value={period}
+        onChange={setPeriod}
+        leading={
+          <>
+            <Tooltip
+              title={`Backdrop resolution — ${quality === "original" ? "original" : `${quality}p`}`}
+              enterDelay={400}
+            >
+              <Button
+                size="small"
+                onClick={(event) => setQualityMenu(event.currentTarget)}
+                startIcon={<HighQualityRounded sx={{ fontSize: 16 }} />}
+                sx={{
+                  minWidth: 0,
+                  px: 1.2,
+                  py: 0.25,
+                  borderRadius: 99,
+                  textTransform: "none",
+                  fontSize: "0.7rem",
+                  fontWeight: 600,
+                  color: "rgba(255,255,255,.8)",
+                  background: "rgba(10,9,15,.42)",
+                  border: "1px solid rgba(255,255,255,.14)",
+                  "& .MuiButton-startIcon": { mr: 0.5 },
+                  "&:hover": { background: "rgba(255,255,255,.1)", color: "#fff" },
+                }}
+              >
+                {quality === "original" ? "Orig" : `${quality}p`}
+              </Button>
+            </Tooltip>
+            <Menu
+              anchorEl={qualityMenu}
+              open={Boolean(qualityMenu)}
+              onClose={() => setQualityMenu(null)}
+              anchorOrigin={{ vertical: "top", horizontal: "center" }}
+              transformOrigin={{ vertical: "bottom", horizontal: "center" }}
+            >
+              {HOME_QUALITIES.map((option) => (
+                <MenuItem
+                  key={option.value}
+                  selected={quality === option.value}
+                  onClick={() => chooseQuality(option.value)}
+                >
+                  {option.label}
+                </MenuItem>
+              ))}
+            </Menu>
+          </>
+        }
+      />
 
       {loadingSlides && (
         <Box

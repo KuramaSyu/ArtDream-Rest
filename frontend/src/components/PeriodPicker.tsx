@@ -1,4 +1,5 @@
 import { Box, ToggleButton, ToggleButtonGroup, Tooltip } from "@mui/material";
+import type { ReactNode } from "react";
 import type { TimeRange } from "../api/types";
 
 const options: Array<{ value: TimeRange; label: string; title: string }> = [
@@ -12,12 +13,17 @@ const options: Array<{ value: TimeRange; label: string; title: string }> = [
 export function PeriodPicker({
   value,
   onChange,
+  leading,
 }: {
   value: TimeRange;
   onChange: (value: TimeRange) => void;
+  leading?: ReactNode;
 }) {
   return (
-    <Box className="period-dock">
+    <Box
+      className="period-dock"
+      sx={{ display: "flex", alignItems: "center", gap: 1 }}
+    >
       <ToggleButtonGroup
         value={value}
         exclusive
@@ -59,6 +65,7 @@ export function PeriodPicker({
           </ToggleButton>
         ))}
       </ToggleButtonGroup>
+      {leading}
     </Box>
   );
 }

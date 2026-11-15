@@ -4,6 +4,7 @@ import {
   Button,
   Chip,
   CircularProgress,
+  Dialog,
   Divider,
   IconButton,
   Slider,
@@ -16,9 +17,12 @@ import {
   ArrowLeftRounded,
   ArrowRightRounded,
   AutoAwesomeRounded,
+  CloseRounded,
   CloudUploadOutlined,
   EmojiEventsRounded,
+  FullscreenRounded,
   SwapHorizRounded,
+  VisibilityOffRounded,
 } from "@mui/icons-material";
 import { AnimatePresence, motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
@@ -29,6 +33,7 @@ import { EmptyState, LoadingView } from "../components/Loading";
 import { PageShell } from "../components/PageShell";
 import { useToast } from "../components/Feedback";
 import { useStageImages } from "../theme/ThemeHost";
+import { useFrontendConfig } from "../config/FrontendConfig";
 
 type Side = "left" | "right";
 
@@ -51,6 +56,9 @@ export function RankPage() {
   const { user } = useAuth();
   const { notify } = useToast();
   const theme = useTheme();
+  const { config: frontendConfig, loading: frontendConfigLoading } = useFrontendConfig();
+  const rankingAnonymized = frontendConfig.rankingAnonymized;
+  const hideAuthors = frontendConfigLoading || rankingAnonymized;
 
   const [modes, setModes] = useState<VoteMode[]>([]);
   const [pair, setPair] = useState<ImageItem[]>([]);
@@ -61,12 +69,50 @@ export function RankPage() {
   const [picked, setPicked] = useState<Side | null>(null);
   const [castCount, setCastCount] = useState(0);
   const [reloadTick, setReloadTick] = useState(0);
+  const [fullscreen, setFullscreen] = useState<ImageItem | null>(null);
+  const [fullscreenLoaded, setFullscreenLoaded] = useState(false);
 
   const recent = useRef<string[]>([]);
   const startedAt = useRef(Date.now());
+  const sliderRef = useRef(50);
+  const sliderAnimation = useRef<number | null>(null);
 
   const pairUrls = useMemo(() => pair.map((item) => item.url), [pair]);
   useStageImages(pairUrls);
+
+  useEffect(() => {
+    sliderRef.current = slider;
+  }, [slider]);
+
+  useEffect(() => {
+    return () => {
+      if (sliderAnimation.current !== null) cancelAnimationFrame(sliderAnimation.current);
+    };
+  }, []);
+
+  /** Smoothly nudge the long slider when the pointer explores an image. */
+  const animateSlider = useCallback((target: number) => {
+    if (sliderAnimation.current !== null) cancelAnimationFrame(sliderAnimation.current);
+    const start = sliderRef.current;
+    if (start === target) return;
+    const started = performance.now();
+    const duration = 240;
+    const step = (now: number) => {
+      const progress = Math.min(1, (now - started) / duration);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const value = Math.round(start + (target - start) * eased);
+      sliderRef.current = value;
+      setSlider(value);
+      sliderAnimation.current = progress < 1 ? requestAnimationFrame(step) : null;
+    };
+    sliderAnimation.current = requestAnimationFrame(step);
+  }, []);
+
+  const handleHover = (side: Side) => {
+    if (voting || pair.length < 2) return;
+    if (!window.matchMedia("(hover: hover)").matches) return;
+    animateSlider(side === "left" ? 25 : 75);
+  };
 
   const fiveMode = useMemo(() => {
     return (
@@ -122,6 +168,11 @@ export function RankPage() {
       }
       setPair(items);
       setPicked(null);
+      if (sliderAnimation.current !== null) {
+        cancelAnimationFrame(sliderAnimation.current);
+        sliderAnimation.current = null;
+      }
+      sliderRef.current = 50;
       setSlider(50);
       startedAt.current = Date.now();
       if (items.length < 2) {
@@ -240,9 +291,14 @@ export function RankPage() {
 
   const left = pair[0];
   const right = pair[1];
-  const leftName = left?.title || left?.author || "left";
-  const rightName = right?.title || right?.author || "right";
+  const leftAuthorHidden = hideAuthors;
+  const rightAuthorHidden = hideAuthors;
+  const leftName =
+    left?.title || (!leftAuthorHidden ? left?.author : "") || "left image";
+  const rightName =
+    right?.title || (!rightAuthorHidden ? right?.author : "") || "right image";
   const verdict = verdictText(slider, leftName, rightName);
+  const fullscreenAuthorHidden = hideAuthors;
 
   return (
     <PageShell maxWidth="xl">
@@ -280,6 +336,14 @@ export function RankPage() {
           </Typography>
         </Box>
         <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
+          {rankingAnonymized && (
+            <Chip
+              size="small"
+              icon={<VisibilityOffRounded sx={{ fontSize: 16 }} />}
+              label="authors anonymized"
+              sx={{ background: "rgba(255,255,255,.08)", opacity: 0.8 }}
+            />
+          )}
           <Chip
             size="small"
             icon={<AutoAwesomeRounded sx={{ fontSize: 16 }} />}
@@ -344,6 +408,9 @@ export function RankPage() {
                   if (!item) return null;
                   const side: Side = index === 0 ? "left" : "right";
                   const isPicked = picked === side;
+                  const hideAuthor = hideAuthors;
+                  const cardLabel =
+                    item.title || (hideAuthor ? "this artwork" : item.author);
                   return (
                     <motion.div
                       key={item.id}
@@ -357,8 +424,9 @@ export function RankPage() {
                         className="image-frame rank-image-card"
                         role="button"
                         tabIndex={0}
-                        aria-label={`Vote for ${item.title || item.author}`}
+                        aria-label={`Vote for ${cardLabel}`}
                         onClick={() => pick(side)}
+                        onMouseEnter={() => handleHover(side)}
                         onKeyDown={(event) => {
                           if (event.key === "Enter" || event.key === " ") {
                             event.preventDefault();
@@ -377,11 +445,39 @@ export function RankPage() {
                         }}
                       >
                         <img
-                          src={imageVariant(item.url, { w: 1400, quality: 88 })}
-                          alt={item.title || `Artwork by ${item.author}`}
+                          src={imageVariant(item.url, { h: 720, quality: 82 })}
+                          alt={
+                            item.title ||
+                            (hideAuthor ? "Artwork" : `Artwork by ${item.author}`)
+                          }
                           draggable={false}
-                          loading="lazy"
+                          decoding="async"
+                          fetchPriority="high"
                         />
+
+                        <Tooltip title="View fullscreen">
+                          <IconButton
+                            size="small"
+                            aria-label={`View ${cardLabel} fullscreen`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setFullscreenLoaded(false);
+                              setFullscreen(item);
+                            }}
+                            onKeyDown={(event) => event.stopPropagation()}
+                            sx={{
+                              position: "absolute",
+                              top: 12,
+                              right: 12,
+                              zIndex: 4,
+                              color: "#fff",
+                              background: "rgba(10,9,15,.62)",
+                              "&:hover": { background: "rgba(10,9,15,.9)" },
+                            }}
+                          >
+                            <FullscreenRounded fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
 
                         <Box
                           className="pick-hint"
@@ -395,8 +491,7 @@ export function RankPage() {
                               px: 2.4,
                               py: 1.2,
                               borderRadius: 99,
-                              background: "rgba(10,9,15,.52)",
-                              backdropFilter: "blur(12px)",
+                              background: "rgba(10,9,15,.78)",
                               border: "1px solid rgba(255,255,255,.24)",
                               display: "flex",
                               alignItems: "center",
@@ -433,32 +528,38 @@ export function RankPage() {
                             gap: 1.5,
                           }}
                         >
-                          <Box sx={{ minWidth: 0 }}>
-                            <Typography
-                              className="display"
-                              sx={{
-                                fontSize: { xs: "1.25rem", md: "1.7rem" },
-                                fontWeight: 600,
-                                lineHeight: 1.1,
-                                color: "#fff",
-                                textShadow: "0 2px 18px rgba(0,0,0,.6)",
-                              }}
-                              noWrap
-                            >
-                              {item.title || "Untitled dream"}
-                            </Typography>
-                            <Typography
-                              sx={{
-                                color: "rgba(255,255,255,.72)",
-                                fontSize: "0.82rem",
-                                letterSpacing: "0.05em",
-                                textTransform: "uppercase",
-                              }}
-                              noWrap
-                            >
-                              {item.author}
-                            </Typography>
-                          </Box>
+                          {(item.title || (!hideAuthor && item.author)) && (
+                            <Box sx={{ minWidth: 0 }}>
+                              {item.title && (
+                                <Typography
+                                  className="display"
+                                  sx={{
+                                    fontSize: { xs: "1.25rem", md: "1.7rem" },
+                                    fontWeight: 600,
+                                    lineHeight: 1.1,
+                                    color: "#fff",
+                                    textShadow: "0 2px 18px rgba(0,0,0,.6)",
+                                  }}
+                                  noWrap
+                                >
+                                  {item.title}
+                                </Typography>
+                              )}
+                              {!hideAuthor && item.author && (
+                                <Typography
+                                  sx={{
+                                    color: "rgba(255,255,255,.72)",
+                                    fontSize: "0.82rem",
+                                    letterSpacing: "0.05em",
+                                    textTransform: "uppercase",
+                                  }}
+                                  noWrap
+                                >
+                                  {item.author}
+                                </Typography>
+                              )}
+                            </Box>
+                          )}
                           <Box
                             sx={{
                               fontSize: "0.7rem",
@@ -540,7 +641,13 @@ export function RankPage() {
               <Slider
                 className="slider-track-gradient"
                 value={slider}
-                onChange={(_event, value) => setSlider(value as number)}
+                onChange={(_event, value) => {
+                  if (sliderAnimation.current !== null) {
+                    cancelAnimationFrame(sliderAnimation.current);
+                    sliderAnimation.current = null;
+                  }
+                  setSlider(value as number);
+                }}
                 min={1}
                 max={100}
                 step={1}
@@ -581,7 +688,8 @@ export function RankPage() {
               }}
             >
               <Typography variant="body2" color="text.secondary" sx={{ opacity: 0.8 }}>
-                Tap an image for a soft 2/5 or 4/5. Slide for the whole story.
+                Hover an image to nudge the slider, tap for a soft 2/5 or 4/5, or slide
+                for the whole story.
               </Typography>
               <Button
                 variant="contained"
@@ -602,8 +710,6 @@ export function RankPage() {
                   py: 1.1,
                   textTransform: "none",
                   fontWeight: 700,
-                  background: `linear-gradient(120deg, ${theme.palette.primary.main}, ${theme.palette.secondary.main})`,
-                  color: theme.palette.getContrastText(theme.palette.primary.main),
                   "&:hover": { transform: "translateY(-1px) scale(1.01)" },
                   transition: "transform 200ms ease",
                 }}
@@ -624,6 +730,94 @@ export function RankPage() {
         </Box>
       )}
 
+      <Dialog
+        fullScreen
+        open={Boolean(fullscreen)}
+        onClose={() => setFullscreen(null)}
+        PaperProps={{ sx: { background: "rgba(8,7,12,.97)" } }}
+      >
+        <Box
+          sx={{
+            position: "relative",
+            height: "100vh",
+            width: "100vw",
+            display: "grid",
+            placeItems: "center",
+            p: { xs: 0, sm: 3 },
+            overflow: "hidden",
+          }}
+        >
+          <IconButton
+            aria-label="Close fullscreen"
+            onClick={() => setFullscreen(null)}
+            sx={{
+              position: "fixed",
+              top: { xs: 12, sm: 20 },
+              right: { xs: 12, sm: 20 },
+              zIndex: 5,
+              color: "#fff",
+              background: "rgba(10,9,15,.65)",
+              "&:hover": { background: "rgba(10,9,15,.92)" },
+            }}
+          >
+            <CloseRounded />
+          </IconButton>
+
+          {!fullscreenLoaded && (
+            <CircularProgress sx={{ position: "absolute", zIndex: 1 }} />
+          )}
+
+          {fullscreen && (
+            <>
+              <Box
+                component="img"
+                src={imageVariant(fullscreen.url, { w: 2560, quality: 90 })}
+                alt={
+                  fullscreen.title ||
+                  (fullscreenAuthorHidden ? "Artwork" : `Artwork by ${fullscreen.author}`)
+                }
+                draggable={false}
+                onLoad={() => setFullscreenLoaded(true)}
+                onError={() => setFullscreenLoaded(true)}
+                sx={{
+                  maxWidth: "100%",
+                  maxHeight: "100%",
+                  objectFit: "contain",
+                  opacity: fullscreenLoaded ? 1 : 0,
+                  transition: "opacity 200ms ease",
+                }}
+              />
+                {(fullscreen.title || (!fullscreenAuthorHidden && fullscreen.author)) && (
+                  <Box
+                    sx={{
+                      position: "absolute",
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      p: { xs: 2, sm: 3 },
+                      background: "linear-gradient(0deg, rgba(0,0,0,.72), transparent)",
+                      pointerEvents: "none",
+                    }}
+                  >
+                    {fullscreen.title && (
+                      <Typography
+                        className="display"
+                        sx={{ color: "#fff", fontSize: { xs: "1.4rem", sm: "2rem" }, fontWeight: 620 }}
+                      >
+                        {fullscreen.title}
+                      </Typography>
+                    )}
+                    {!fullscreenAuthorHidden && fullscreen.author && (
+                      <Typography sx={{ color: "rgba(255,255,255,.7)" }}>
+                        {fullscreen.author}
+                      </Typography>
+                    )}
+                  </Box>
+                )}
+            </>
+          )}
+        </Box>
+      </Dialog>
     </PageShell>
   );
 }

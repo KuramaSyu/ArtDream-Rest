@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { Box, CssBaseline, ThemeProvider, alpha, createTheme } from "@mui/material";
-import { resolveImageUrl } from "../api/client";
+import { imageVariant } from "../api/client";
 import { CustomThemeImpl, type CustomTheme } from "./customTheme";
 import {
   buildPaletteFromSwatches,
@@ -36,6 +36,23 @@ interface ThemeHostValue {
 }
 
 const ThemeHostContext = createContext<ThemeHostValue | null>(null);
+
+/** Vibrant only needs a small sample; pulling full uploads into the browser
+ *  for colour extraction is the slowest part of theme generation. */
+function themeSource(url: string): string {
+  if (url.startsWith("blob:") || url.startsWith("data:")) return url;
+  return imageVariant(url, { w: 640, quality: 78 });
+}
+
+/** Defer colour extraction until after the page has painted. */
+function scheduleIdle(callback: () => void): () => void {
+  if (typeof window.requestIdleCallback === "function") {
+    const id = window.requestIdleCallback(callback, { timeout: 1200 });
+    return () => window.cancelIdleCallback(id);
+  }
+  const id = window.setTimeout(callback, 160);
+  return () => window.clearTimeout(id);
+}
 
 const DEFAULT_THEME = new CustomThemeImpl(
   createTheme({
@@ -121,11 +138,14 @@ function recordFromSwatches(
 async function themeForImage(image: string): Promise<CustomTheme> {
   let swatches = swatchCache.get(image);
   if (!swatches) {
-    swatches = await extractImageSwatches(resolveImageUrl(image));
+    swatches = await extractImageSwatches(image);
     swatchCache.set(image, swatches);
     writeCache(swatchCache);
   }
-  const record = recordFromSwatches(swatches, image, swatches.suggestedMode);
+  // ArtDream's pages are composed for a dark canvas (image overlays, white
+  // type). The extracted palette still follows the artwork's hues, but we
+  // deliberately keep the dark variant so the UI stays legible across pages.
+  const record = recordFromSwatches(swatches, image, "dark");
   return new CustomThemeImpl(buildThemeFromImageRecord(record));
 }
 
@@ -181,9 +201,17 @@ export function ThemeHost({ children }: { children: ReactNode }) {
     if (stageKey === appliedKey.current || stageKey === failedKey.current) return;
     appliedKey.current = stageKey;
     const image = stageImages[Math.floor(Math.random() * stageImages.length)]!;
-    void applyImage(image).then((ok) => {
-      if (!ok) failedKey.current = stageKey;
+    let cancelled = false;
+    const cancel = scheduleIdle(() => {
+      if (cancelled) return;
+      void applyImage(image).then((ok) => {
+        if (!ok) failedKey.current = stageKey;
+      });
     });
+    return () => {
+      cancelled = true;
+      cancel();
+    };
   }, [appliedKey, applyImage, failedKey, stageImages, stageKey]);
 
   const shuffle = useCallback(() => {
@@ -211,14 +239,9 @@ export function ThemeHost({ children }: { children: ReactNode }) {
     <ThemeHostContext.Provider value={value}>
       <ThemeProvider theme={theme}>
         <CssBaseline />
-        <Box
-          aria-hidden
-          className="theme-backdrop"
-          sx={{
-            backgroundImage: themeImage ? `url("${resolveImageUrl(themeImage)}")` : "none",
-            backgroundColor: theme.palette.background.default,
-          }}
-        />
+        {/* A static gradient wash is virtually free compared with a
+            full-screen blurred image + grain + backdrop-filters. The
+            artwork is still what drives every colour token. */}
         <Box
           aria-hidden
           className="theme-wash"
@@ -252,6 +275,9 @@ export function useStageImages(urls: Array<string | undefined | null> | undefine
   const key = useMemo(() => (urls ?? []).filter(Boolean).join("|"), [urls]);
   useEffect(() => {
     if (!urls || urls.length === 0) return;
-    setStageImages(urls.filter((url): url is string => Boolean(url)));
+    const prepared = urls
+      .filter((url): url is string => Boolean(url))
+      .map(themeSource);
+    setStageImages(prepared);
   }, [key, setStageImages]);
 }

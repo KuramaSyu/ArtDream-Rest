@@ -16,8 +16,8 @@ import (
 	"strings"
 
 	"github.com/gen2brain/webp"
-	"golang.org/x/image/draw"
 	_ "golang.org/x/image/bmp"
+	"golang.org/x/image/draw"
 	_ "golang.org/x/image/tiff"
 )
 
@@ -197,10 +197,19 @@ func clampQuality(format string, q int) int {
 func targetSize(srcW, srcH, reqW, reqH int) (int, int) {
 	switch {
 	case reqW > 0 && reqH > 0:
+		// Explicit two-axis requests are honoured verbatim (clients may want
+		// a specific crop box), but clamp the single-axis paths below so the
+		// UI never decodes/encodes an upscaled copy by accident.
 		return reqW, reqH
 	case reqW > 0:
+		if reqW > srcW {
+			reqW = srcW
+		}
 		return reqW, maxInt(1, int(float64(srcH)*float64(reqW)/float64(srcW)+0.5))
 	case reqH > 0:
+		if reqH > srcH {
+			reqH = srcH
+		}
 		return maxInt(1, int(float64(srcW)*float64(reqH)/float64(srcH)+0.5)), reqH
 	default:
 		return srcW, srcH

@@ -82,6 +82,14 @@ type ImageFilter struct {
 	Offset         int
 }
 
+// AppConfig is the server-side frontend configuration. It lets a global
+// display decision (currently ranking author anonymization) apply to every
+// visitor without changing what the ranking API returns.
+type AppConfig struct {
+	RankingAnonymized bool      `json:"rankingAnonymized"`
+	UpdatedAt         time.Time `json:"updatedAt"`
+}
+
 // VoteFilter narrows a vote listing. Author and TitleRegex are matched
 // against the two images referenced by a vote; Username is the voting user.
 // Times are unix seconds and inclusive.

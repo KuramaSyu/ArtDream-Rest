@@ -40,6 +40,8 @@ import {
   LeaderboardRounded,
   RefreshRounded,
   TuneRounded,
+  VisibilityOffRounded,
+  VisibilityRounded,
 } from "@mui/icons-material";
 import { api, ApiError, imageVariant } from "../api/client";
 import type { AdminFilter, ImageItem, TimeRange, User, Vote, VoteMode, VoteWinner } from "../api/types";
@@ -49,6 +51,7 @@ import { EmptyState, LoadingView } from "../components/Loading";
 import { PageHeader, PageShell } from "../components/PageShell";
 import { useStageImages } from "../theme/ThemeHost";
 import { formatBytes, relativeTime } from "../utils/format";
+import { useFrontendConfig } from "../config/FrontendConfig";
 
 const PAGE_SIZE = 25;
 const TIME_OPTIONS: Array<{ value: TimeRange; label: string }> = [
@@ -65,6 +68,9 @@ const inputSx = { "& .MuiInputBase-input": { fontSize: "0.86rem" } } as const;
 export function AdminPage() {
   const { user } = useAuth();
   const { notify } = useToast();
+  const { config: frontendConfig, update: updateFrontendConfig } = useFrontendConfig();
+  const rankingAnonymized = frontendConfig.rankingAnonymized;
+  const [rankingBusy, setRankingBusy] = useState(false);
   const [tab, setTab] = useState<"votes" | "images" | "users">("votes");
 
   const [modes, setModes] = useState<VoteMode[]>([]);
@@ -431,6 +437,43 @@ export function AdminPage() {
         action={
           <>
             <Button
+              variant={rankingAnonymized ? "contained" : "outlined"}
+              size="small"
+              disabled={rankingBusy}
+              startIcon={
+                rankingAnonymized ? <VisibilityOffRounded /> : <VisibilityRounded />
+              }
+              onClick={async () => {
+                const next = !rankingAnonymized;
+                setRankingBusy(true);
+                try {
+                  await updateFrontendConfig({ rankingAnonymized: next });
+                  notify(
+                    next
+                      ? "All authors are now hidden on ranking surfaces."
+                      : "Authors are visible on ranking surfaces again.",
+                    "info",
+                  );
+                } catch (error) {
+                  notify(
+                    error instanceof ApiError
+                      ? error.message
+                      : "Could not update the frontend config.",
+                    "error",
+                  );
+                } finally {
+                  setRankingBusy(false);
+                }
+              }}
+              sx={{ borderRadius: 99, textTransform: "none" }}
+            >
+              {rankingBusy
+                ? "Sharing…"
+                : rankingAnonymized
+                  ? "Reveal ranking authors"
+                  : "Anonymize ranking"}
+            </Button>
+            <Button
               variant="outlined"
               size="small"
               startIcon={<TuneRounded />}
@@ -569,7 +612,7 @@ export function AdminPage() {
                               <Box
                                 component="img"
                                 className="admin-thumb"
-                                src={imageVariant(vote.leftImage.url, { w: 160, quality: 70 })}
+                                src={imageVariant(vote.leftImage.url, { w: 360, quality: 78 })}
                                 alt=""
                               />
                             </Tooltip>
@@ -582,7 +625,7 @@ export function AdminPage() {
                               <Box
                                 component="img"
                                 className="admin-thumb"
-                                src={imageVariant(vote.rightImage.url, { w: 160, quality: 70 })}
+                                src={imageVariant(vote.rightImage.url, { w: 360, quality: 78 })}
                                 alt=""
                               />
                             </Tooltip>
@@ -693,7 +736,9 @@ export function AdminPage() {
           </FilterCard>
 
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.4, opacity: 0.8 }}>
-            {imagesTotal} image{imagesTotal === 1 ? "" : "s"} matching these filters.
+            {imagesTotal} image{imagesTotal === 1 ? "" : "s"} matching these filters. The global
+            Anonymize ranking button is a device-local frontend decision; the API still returns
+            the author.
           </Typography>
 
           {imagesLoading ? (
@@ -718,7 +763,7 @@ export function AdminPage() {
                   <Box sx={{ position: "relative", aspectRatio: "4 / 3", bgcolor: "rgba(0,0,0,.25)" }}>
                     <Box
                       component="img"
-                      src={imageVariant(image.url, { w: 600, quality: 78 })}
+                      src={imageVariant(image.url, { w: 640, quality: 78 })}
                       alt={image.title || image.author}
                       loading="lazy"
                       sx={{ width: "100%", height: "100%", objectFit: "cover" }}
@@ -726,7 +771,7 @@ export function AdminPage() {
                   </Box>
                   <Box sx={{ p: 1.5 }}>
                     <Typography noWrap className="display" sx={{ fontSize: "1.1rem", fontWeight: 620 }}>
-                      {image.title || "Untitled"}
+                      {image.title || image.author}
                     </Typography>
                     <Typography noWrap variant="body2" color="text.secondary">
                       {image.author} · {image.width} × {image.height} · {formatBytes(image.sizeBytes)}
@@ -735,7 +780,16 @@ export function AdminPage() {
                       {image.id} · uploaded {relativeTime(image.createdAt)}
                       {image.uploadedBy ? ` · user ${image.uploadedBy}` : " · anonymous"}
                     </Typography>
-                    <Box sx={{ display: "flex", justifyContent: "flex-end", mt: 0.6 }}>
+                    <Box
+                      sx={{
+                        display: "flex",
+                        justifyContent: "flex-end",
+                        alignItems: "center",
+                        flexWrap: "wrap",
+                        gap: 0.2,
+                        mt: 0.6,
+                      }}
+                    >
                       <Button size="small" startIcon={<EditOutlined />} onClick={() => setEditImage(image)}>
                         Edit
                       </Button>
@@ -918,7 +972,7 @@ export function AdminPage() {
         description={
           <Box>
             <Typography variant="body2">
-              “{deleteImage?.title || "Untitled"}” by {deleteImage?.author} will be removed from disk.
+              “{deleteImage?.title || deleteImage?.author}” will be removed from disk.
             </Typography>
             <FormControlLabel
               sx={{ mt: 1 }}
@@ -1174,7 +1228,7 @@ function VoteEditDialog({
               <Box sx={{ flex: 1 }}>
                 <Box
                   component="img"
-                  src={imageVariant(vote.leftImage.url, { w: 400, quality: 80 })}
+                  src={imageVariant(vote.leftImage.url, { w: 640, quality: 78 })}
                   alt=""
                   sx={{ width: "100%", height: 110, objectFit: "cover", borderRadius: 2 }}
                 />
@@ -1187,7 +1241,7 @@ function VoteEditDialog({
               <Box sx={{ flex: 1 }}>
                 <Box
                   component="img"
-                  src={imageVariant(vote.rightImage.url, { w: 400, quality: 80 })}
+                  src={imageVariant(vote.rightImage.url, { w: 640, quality: 78 })}
                   alt=""
                   sx={{ width: "100%", height: 110, objectFit: "cover", borderRadius: 2 }}
                 />
@@ -1305,7 +1359,7 @@ function ImageEditDialog({
         {image && (
           <Box
             component="img"
-            src={imageVariant(image.url, { w: 900, quality: 82 })}
+            src={imageVariant(image.url, { h: 1080, quality: 85 })}
             alt=""
             sx={{ width: "100%", borderRadius: 2, mb: 2 }}
           />
